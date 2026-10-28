@@ -1,0 +1,11 @@
+.world-memory-settings .inline-drawer-content > * { margin-top: .55em; }
+.world-memory-settings details > summary { cursor: pointer; font-weight: 600; }
+.world-memory-settings details > label,.world-memory-settings details > input,.world-memory-settings details > select { display: block; width: 100%; margin: .45em 0; }
+.world-memory-settings .wm-actions { display: flex; flex-wrap: wrap; gap: .4em; }
+.world-memory-settings .wm-actions button { flex: 1 1 auto; margin: 0; }
+.world-memory-settings .wm-muted { opacity: .75; font-size: .88em; overflow-wrap: anywhere; }
+.world-memory-settings .wm-status { padding: .5em; border-left: 3px solid var(--SmartThemeQuoteColor, #888); overflow-wrap: anywhere; }
+.world-memory-settings .wm-record { padding: .6em 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); }
+.world-memory-settings .wm-record pre { white-space: pre-wrap; font: inherit; max-height: 15em; overflow: auto; }
+.world-memory-settings .wm-record header { display: flex; gap: .4em; align-items: center; flex-wrap: wrap; }
+.world-memory-settings .wm-record button { font-size: .85em; }

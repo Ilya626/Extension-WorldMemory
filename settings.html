@@ -1,0 +1,39 @@
+<div class="world-memory-settings">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header"><b>World Memory · 0.1.0</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+    <div class="inline-drawer-content">
+      <p class="wm-muted">Character profiles and reference WI from Summaryception's saved story. Your original lorebooks stay intact.</p>
+      <label class="checkbox_label"><input id="wm_enabled" type="checkbox"><span>Enable World Memory</span></label>
+      <label class="checkbox_label"><input id="wm_auto" type="checkbox"><span>Update WI after a Summaryception packet is saved</span></label>
+      <label class="checkbox_label"><input id="wm_main_constant" type="checkbox"><span>Always include main character profiles</span></label>
+      <small class="wm-muted">Main profiles use ST's Constant strategy. Other entries use normal keyword activation and the native WI budget.</small>
+      <label for="wm_main_names">Main characters to always track (one name per line)</label>
+      <textarea id="wm_main_names" class="text_pole" rows="3" placeholder="Mira&#10;Anton"></textarea>
+      <small class="wm-muted">Principal characters in played scenes are also picked up automatically. This list adds explicit names; it does not reveal character-card secrets.</small>
+      <details><summary>Request and insertion settings</summary>
+        <label for="wm_language">Entry language</label>
+        <select id="wm_language" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Русский</option></select>
+        <label for="wm_target">Target tokens per entry (writing guidance)</label><input id="wm_target" class="text_pole" type="number" min="40" step="20">
+        <label for="wm_response_tokens">Maximum response tokens (0 = follow Summaryception)</label><input id="wm_response_tokens" class="text_pole" type="number" min="0" step="512">
+        <label for="wm_detail_budget">Original-message detail tokens per packet</label><input id="wm_detail_budget" class="text_pole" type="number" min="0" step="500">
+        <small class="wm-muted">The complete saved L0 summary is always supplied. Original messages add detail, newest first, without cutting messages.</small>
+        <label for="wm_reference_budget">Prior entry-fact tokens per request</label><input id="wm_reference_budget" class="text_pole" type="number" min="500" step="500">
+        <label for="wm_position">WI insertion position</label>
+        <select id="wm_position" class="text_pole"><option value="4">In-chat @ Depth — near the latest messages</option><option value="0">Before Main Prompt / Story String</option><option value="1">After Main Prompt / Story String</option><option value="2">Before Author's Note</option><option value="3">After Author's Note</option></select>
+        <label for="wm_depth">Depth (messages from the end)</label><input id="wm_depth" class="text_pole" type="number" min="0">
+        <small class="wm-muted">Depth 2 places WI before the last assistant/user pair in an ordinary exchange. Prompt Manager and Post-History can affect the final order.</small>
+      </details>
+      <div class="wm-actions"><button id="wm_update" class="menu_button">Update WI now</button><button id="wm_stop" class="menu_button">Stop</button><button id="wm_open" class="menu_button">Open lorebook</button></div>
+      <div id="wm_status" class="wm-status" role="status">Loading…</div>
+      <div id="wm_integration" class="wm-muted"></div>
+      <div id="wm_book" class="wm-muted"></div>
+      <details><summary>Characters</summary><div id="wm_characters"></div></details>
+      <details><summary>Other records and sources</summary><div id="wm_records"></div></details>
+      <details><summary>Portable backup</summary>
+        <p class="wm-muted">Native lorebook JSON is editable and carries World Memory's source contributions. Import also supports World Memory's backup with its packet links.</p>
+        <div class="wm-actions"><button id="wm_export" class="menu_button">Export backup</button><button id="wm_import" class="menu_button">Import backup</button></div>
+        <input id="wm_import_file" type="file" accept=".json" hidden>
+      </details>
+    </div>
+  </div>
+</div>

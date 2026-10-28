@@ -1,0 +1,12 @@
+{
+    "display_name": "World Memory",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Ilya626",
+    "version": "0.1.0",
+    "homePage": "https://github.com/Ilya626/Extension-WorldMemory",
+    "auto_update": true
+}
