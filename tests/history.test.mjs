@@ -40,13 +40,16 @@ test('raw hits expand in chronological positions and replace fully covered compa
     assert.ok(!result.text.includes('Vera made an'));
     assert.ok(!result.text.includes('messages 2'));
 });
-test('partial raw selection retains scene frame without duplicating full L0', async () => {
+test('partial raw selection preserves selected L0 detail of the remaining sources', async () => {
     const oneGroup = await makeGroups(p, countTokens, 1000);
     const oneEpisode = [{ id: oneGroup[0].id, sourceIds: p.sourceMessageIds, detail: 'DETAIL VERSION', compact: 'SCENE FRAME', keys: [] }];
     const nodes = historyNodes({ packets: [p] }, { p1: { revision: revision(p), episodes: oneEpisode } });
-    const docs = candidates(nodes), chosen = [docs[0], docs.find(d => d.kind === 'raw' && d.order === 4)];
-    const result = await assemble(nodes, chosen, { baseTokens: 200, zoomTokens: 200, countTokens });
-    assert.ok(result.text.includes('SCENE FRAME')); assert.ok(result.text.includes('I question')); assert.ok(!result.text.includes('DETAIL VERSION'));
+    const docs = candidates(nodes), raw = docs.find(d => d.kind === 'raw' && d.order === 4);
+    for (const chosen of [[docs[0], raw], [raw, docs[0]]]) {
+        const result = await assemble(nodes, chosen, { baseTokens: 200, zoomTokens: 200, countTokens });
+        assert.ok(result.text.includes('DETAIL VERSION')); assert.ok(result.text.includes('I question'));
+        assert.equal(result.text.match(/DETAIL VERSION/g).length, 1);
+    }
 });
 test('token budget skips a huge exchange and still permits smaller later hits', async () => {
     const nodes = historyNodes({ packets: [p] }, stored), docs = candidates(nodes);
@@ -57,6 +60,7 @@ test('token budget skips a huge exchange and still permits smaller later hits', 
     const tooSmall = await assemble(nodes, [], { baseTokens: 1, zoomTokens: 10000, countTokens });
     assert.equal(tooSmall.text, null);
 });
+
 test('edits invalidate derived episodes; stale, overlapping or manually hidden sources fall back', () => {
     const changed = structuredClone(p); changed.sources[0].text = 'No key was borrowed.';
     assert.equal(historyNodes({ packets: [changed] }, stored)[0].compact, p.text);

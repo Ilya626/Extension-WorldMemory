@@ -121,8 +121,8 @@ function renderNode(node, selection) {
     const detail = selection.some(doc => doc.node === node.id && doc.kind === 'detail');
     const covered = new Set(raw.flatMap(doc => doc.sourceIds));
     const full = node.sourceIds.length && node.sourceIds.every(id => covered.has(id));
-    // Partial originals retain a short scene frame, never a third full copy of the same episode.
-    const frame = full ? '' : `[${label(node.sources)} · ${raw.length ? 'scene frame' : detail ? 'L0 detail' : "L0′"}]\n${detail && !raw.length ? node.detail : node.compact}`;
+    // A partial original cannot replace details from the episode's other sources.
+    const frame = full ? '' : `[${label(node.sources)} · ${detail ? 'L0 detail' : raw.length ? 'scene frame' : "L0′"}]\n${detail ? node.detail : node.compact}`;
     return [frame, ...raw.map(doc => `[Original ${label(node.sources.filter(s => doc.sourceIds.includes(s.id)))}]\n${doc.text}`)].filter(Boolean).join('\n');
 }
 export async function assemble(nodes, ranked, { baseTokens, zoomTokens, countTokens }) {
@@ -132,10 +132,11 @@ export async function assemble(nodes, ranked, { baseTokens, zoomTokens, countTok
     if (baseline > baseTokens) return { text: null, reason: `Compact history needs ${baseline} tokens (budget ${baseTokens}); using Summaryception's layered memory.`, selected: [] };
     let selected = [], text = base, used = baseline;
     for (const doc of ranked.slice(0, 30)) {
-        // A raw match is already the highest available detail for its addressed exchange.
+        // Drop a detailed summary only when full originals cover all of its sources.
         if (selected.some(item => item.id === doc.id)) continue;
-        if (doc.kind === 'detail' && selected.some(item => item.node === doc.node && item.kind === 'raw')) continue;
-        const trial = [...selected.filter(item => !(doc.kind === 'raw' && item.node === doc.node && item.kind === 'detail')), doc];
+        let trial = [...selected, doc];
+        const covered = new Set(trial.filter(item => item.kind === 'raw').flatMap(item => item.sourceIds));
+        trial = trial.filter(item => item.kind !== 'detail' || !item.sourceIds.length || !item.sourceIds.every(id => covered.has(id)));
         const next = render(trial), size = await countTokens(next);
         if (size <= baseline + zoomTokens) { selected = trial; text = next; used = size; }
     }

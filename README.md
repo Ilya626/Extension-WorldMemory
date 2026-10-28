@@ -2,7 +2,7 @@
 
 [Русская инструкция](README_RU.md)
 
-**0.2.1 · alpha.** Character profiles and reusable World Info from Summaryception, with optional addressable history: a compact timeline that opens relevant original exchanges at their chronological positions.
+**0.2.2 · alpha.** Character profiles and reusable World Info from Summaryception, with optional addressable history: a compact timeline that opens relevant original exchanges at their chronological positions.
 
 It makes **separate model requests through Summaryception's configured connection**, which can incur additional provider costs. It does not rewrite Summaryception's narrative summaries.
 
@@ -61,7 +61,11 @@ short scene 1 → original exchange from scene 2 → short scene 3 → live chat
 
 A partial excerpt keeps a short scene frame. If originals cover the entire episode, they replace its summary. The history uses Summaryception's selected insertion position. It does not unhide chat messages or alter the live tail/Blind Zone. WI continues through native ST scanning and its own insertion settings.
 
+Version 0.2.2 preserves an already selected detailed L0 when only part of its original sources is included. Full originals replace that detail only when they cover the whole episode. Automatic paragraph/sentence extraction is not enabled.
+
 Defaults: **4,000 tokens** for the compact timeline and **4,000 additional tokens** for selected detail. Whole exchanges are kept; an oversized candidate is skipped, allowing smaller candidates to fit. If the compact timeline itself cannot fit, source links are stale/overlapping, or preparation fails, the ordinary Summaryception layers remain active. This first implementation does not recursively shrink an indefinitely growing L0′ timeline.
+
+For a larger history allowance, set Additional detail budget from what remains after the actual raw tail and compact timeline. For example, a **32k history allowance** with a **16k tail** and **3.4k compact timeline** leaves about **12.6k** for detail. This is an example, not an automatic budget mode. System/card/WI and response tokens need room outside that history allowance in the main model's context. Existing settings are preserved.
 
 ### A simple post-response structure
 
