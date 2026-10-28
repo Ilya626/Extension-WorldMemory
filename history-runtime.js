@@ -90,15 +90,17 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         if (changed) { invalidate(); await saveState(); }
     }
     // Uses only an explicitly configured hosted ST vector provider. Never downloads a model on a phone.
-    async function semantic(query, docs, owner, signal) {
+    async function semantic(query, docs, owner, signal, onActivity) {
         const config = ctx().extensionSettings.vectors || {};
         const modelField = { openai: 'openai_model', openrouter: 'openrouter_model', cohere: 'cohere_model', togetherai: 'togetherai_model', electronhub: 'electronhub_model', chutes: 'chutes_model', nanogpt: 'nanogpt_model' }[config.source];
         if (!modelField || !config[modelField]) throw new Error('Choose a hosted embedding provider and model in ST Vector Storage first. Keyword search is active.');
         const base = { source: config.source, model: config[modelField], collectionId: `wm_history_${owner}_${hash(config.source + config[modelField])}` };
         async function post(route, args) {
             const response = await fetch(`/api/vector/${route}`, { method: 'POST', headers: ctx().getRequestHeaders(), signal, body: JSON.stringify({ ...base, ...args }) });
+            onActivity();
             if (!response.ok) throw new Error(`ST vector ${route}: HTTP ${response.status}. Keyword search is active.`);
-            return route === 'insert' || route === 'delete' ? null : response.json();
+            if (route === 'insert' || route === 'delete') return null;
+            const result = await response.json(); onActivity(); return result;
         }
         const rows = docs.map((doc, index) => ({ hash: parseInt(hash(doc.id + doc.search).slice(0, 8), 16), text: doc.search, index }));
         const saved = new Set(await post('list', {}));
@@ -134,10 +136,13 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         let ranked = lexical;
         vectorWarning = '';
         if (settings().historySemantic) {
-            const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 10000);
+            const abort = new AbortController(); let timeout;
+            // A cold index may need several successful batches. Time out inactivity, not the entire build.
+            const activity = () => { clearTimeout(timeout); timeout = setTimeout(() => abort.abort(), 120000); };
+            activity();
             vectorController = abort;
             try {
-                const semanticHits = await semantic(query, docs, owner, abort.signal);
+                const semanticHits = await semantic(query, docs, owner, abort.signal, activity);
                 // Reciprocal rank fusion: scores from unlike search systems are never compared directly.
                 const scores = new Map(), byId = new Map(docs.map(doc => [doc.id, doc]));
                 for (const list of [lexical, semanticHits]) list.forEach((doc, i) => scores.set(doc.id, (scores.get(doc.id) || 0) + 1 / (20 + i)));
@@ -156,6 +161,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     const events = ctx().eventTypes || ctx().event_types;
     ctx().eventSource.makeFirst(events.MESSAGE_RECEIVED, onReply);
     for (const event of [events.CHAT_CHANGED, events.MESSAGE_EDITED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED].filter(Boolean)) ctx().eventSource.on(event, changed);
+    if (events.GENERATION_STOPPED) ctx().eventSource.on(events.GENERATION_STOPPED, invalidate);
     ctx().eventSource.on(events.GENERATION_ENDED, () => syncHintPrompt(false));
     globalThis.worldMemoryPrepareHistory = prepare;
     attach(); syncRegex();

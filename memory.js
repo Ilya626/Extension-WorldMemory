@@ -1,4 +1,4 @@
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 export const OWNER = 'worldMemory';
 export const TYPES = ['character', 'place', 'object', 'organization', 'lore'];
 export const normalize = text => String(text || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');

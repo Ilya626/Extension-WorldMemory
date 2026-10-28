@@ -2,7 +2,7 @@
 
 [Русская инструкция](README_RU.md)
 
-**0.2.0 · alpha.** Character profiles and reusable World Info from Summaryception, with optional addressable history: a compact timeline that opens relevant original exchanges at their chronological positions.
+**0.2.1 · alpha.** Character profiles and reusable World Info from Summaryception, with optional addressable history: a compact timeline that opens relevant original exchanges at their chronological positions.
 
 It makes **separate model requests through Summaryception's configured connection**, which can incur additional provider costs. It does not rewrite Summaryception's narrative summaries.
 
@@ -81,6 +81,8 @@ The post is visible; the service block is hidden during streaming and detached i
 ### Keyword search and optional embeddings
 
 Local keyword search is the default. Russian WI Forms **0.1.2+** supplies dictionary lemmas for history search as well as its existing native WI inflections. No extra generative call is made before each RP reply.
+
+Cold embedding indexing can take longer than a normal lookup. Version 0.2.1 uses a 120-second inactivity timeout, renewed after each native vector response, instead of a 10-second limit on the entire index/query sequence. Already cached vectors are reused.
 
 For optional semantic history search, first configure a hosted embedding provider/model and its key in **ST Vector Storage**, then enable **Also search using ST's configured hosted embeddings** here. Supported sources: OpenAI, OpenRouter, Cohere, Together AI, Electron Hub, Chutes and NanoGPT. Only this explicit switch allows embedding requests; provider charges may apply. The addon uses native ST vector routes, caches by text, deletes obsolete vectors and fuses semantic/keyword candidate ranks. An unavailable service falls back to keywords. It downloads no model and runs no reranker on the phone. This switch does **not** force semantic activation of native WI entries.
 
