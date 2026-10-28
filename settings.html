@@ -1,6 +1,6 @@
 <div class="world-memory-settings">
   <div class="inline-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header"><b>World Memory · 0.1.0</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+    <div class="inline-drawer-toggle inline-drawer-header"><b>World Memory · 0.2.0</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
     <div class="inline-drawer-content">
       <p class="wm-muted">Character profiles and reference WI from Summaryception's saved story. Your original lorebooks stay intact.</p>
       <label class="checkbox_label"><input id="wm_enabled" type="checkbox"><span>Enable World Memory</span></label>
@@ -10,6 +10,17 @@
       <label for="wm_main_names">Main characters to always track (one name per line)</label>
       <textarea id="wm_main_names" class="text_pole" rows="3" placeholder="Mira&#10;Anton"></textarea>
       <small class="wm-muted">Principal characters in played scenes are also picked up automatically. This list adds explicit names; it does not reveal character-card secrets.</small>
+      <details><summary>History with selective detail · experimental</summary>
+        <label class="checkbox_label"><input id="wm_history" type="checkbox"><span>Build and use addressable L0 / L0′ history</span></label>
+        <p class="wm-muted">Update memory creates detailed episodes and short scene anchors alongside WI. Before a reply, relevant original exchanges replace or expand anchors at their chronological positions. The live chat stays intact. Requires Summaryception 5.5.4-local.21 or later.</p>
+        <label class="checkbox_label"><input id="wm_hints" type="checkbox"><span>Ask the RP model for a hidden scene / keys / carry block</span></label>
+        <small class="wm-muted">Three short fields after the post, attached to that reply and swipe. Missing markup never rejects the RP answer. Adds output tokens without a second request.</small>
+        <label for="wm_history_base">Compact timeline budget (tokens)</label><input id="wm_history_base" class="text_pole" type="number" min="1" step="500">
+        <label for="wm_history_zoom">Additional detail budget (tokens)</label><input id="wm_history_zoom" class="text_pole" type="number" min="0" step="500">
+        <label class="checkbox_label"><input id="wm_semantic" type="checkbox"><span>Also search using ST's configured hosted embeddings</span></label>
+        <small class="wm-muted">Off: local keyword search, including Russian lemmas when Russian WI Forms is ready. On: uses the hosted provider/model and key already configured in ST Vector Storage; may incur charges. No local model downloads. WI keeps native activation rules.</small>
+        <div id="wm_history_status" class="wm-muted" role="status">Prepared before the next RP generation. If unavailable or over budget, ordinary Summaryception layers are used.</div>
+      </details>
       <details><summary>Request and insertion settings</summary>
         <label for="wm_language">Entry language</label>
         <select id="wm_language" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Русский</option></select>
@@ -23,7 +34,7 @@
         <label for="wm_depth">Depth (messages from the end)</label><input id="wm_depth" class="text_pole" type="number" min="0">
         <small class="wm-muted">Depth 2 places WI before the last assistant/user pair in an ordinary exchange. Prompt Manager and Post-History can affect the final order.</small>
       </details>
-      <div class="wm-actions"><button id="wm_update" class="menu_button">Update WI now</button><button id="wm_stop" class="menu_button">Stop</button><button id="wm_open" class="menu_button">Open lorebook</button></div>
+      <div class="wm-actions"><button id="wm_update" class="menu_button">Update memory now</button><button id="wm_stop" class="menu_button">Stop</button><button id="wm_open" class="menu_button">Open lorebook</button></div>
       <div id="wm_status" class="wm-status" role="status">Loading…</div>
       <div id="wm_integration" class="wm-muted"></div>
       <div id="wm_book" class="wm-muted"></div>

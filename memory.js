@@ -1,4 +1,4 @@
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 export const OWNER = 'worldMemory';
 export const TYPES = ['character', 'place', 'object', 'organization', 'lore'];
 export const normalize = text => String(text || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -12,7 +12,7 @@ export function parseResult(text) {
     const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     let result;
     try { result = JSON.parse(raw); }
-    catch { throw new Error('The model did not return JSON. Existing WI was kept. Check the connection or retry Update WI.'); }
+    catch { throw new Error('The model did not return JSON. Existing WI was kept. Check the connection or retry Update memory.'); }
     if (!Array.isArray(result.updates)) throw new Error('The model response has no updates array. Existing WI was kept.');
     return result.updates.map(item => {
         if (!item || typeof item.name !== 'string' || typeof item.facts !== 'string' || typeof item.content !== 'string') {

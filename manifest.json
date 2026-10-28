@@ -6,7 +6,8 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Ilya626",
-    "version": "0.1.0",
+    "version": "0.2.0",
+    "generate_interceptor": "worldMemoryPrepareHistory",
     "homePage": "https://github.com/Ilya626/Extension-WorldMemory",
     "auto_update": true
 }

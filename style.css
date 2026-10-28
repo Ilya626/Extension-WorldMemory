@@ -9,3 +9,5 @@
 .world-memory-settings .wm-record pre { white-space: pre-wrap; font: inherit; max-height: 15em; overflow: auto; }
 .world-memory-settings .wm-record header { display: flex; gap: .4em; align-items: center; flex-wrap: wrap; }
 .world-memory-settings .wm-record button { font-size: .85em; }
+.world-memory-settings details > .checkbox_label { display: flex; align-items: flex-start; gap: .4em; }
+.world-memory-settings details > .checkbox_label input { flex: 0 0 auto; }
