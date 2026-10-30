@@ -23,13 +23,38 @@ Raw chat and retrieved history have separate allowances. Whole history fragments
 
 **History answers “what happened?”; WI answers “who or what is this?”** History can recover a conversation in which a workshop keeper lent a visitor a key until morning. The keeper's WI entry describes the person, workshop and relevant relationships. It is reusable reference, not another scene-by-scene diary.
 
+## Prompt fill bar: defaults and controls
+
+The bar is a **numeric example** for a fresh installation: history 8,000 + raw tail 8,000 + setup 3,000 + WI 3,000 + protected exchange/current post 2,000 = **24,000 input tokens**. Only the two 8,000 settings, protection of 1 exchange and whole-input target 24,000 are defaults; the other sizes are illustrative. Each segment names its control and the restriction that actually applies.
+
+![24,000-token prompt fill example, segment sizes, soft targets and controls](docs/assets/prompt-budget-en.svg)
+
+**24,000 − 8,000 − 8,000 leaves roughly 8,000 for everything else: a planning example, not a reserved quota.** Character and WI size depend on your ST settings. The input can exceed the target; whole exchanges and source fragments are not clipped to fit this arithmetic. Set the model's context window and output reserve separately in ST. Token counts are estimates and can differ from provider usage.
+
+| Part | How it is assembled |
+| --- | --- |
+| **History: 8,000** | The latest player post is the search query. Words/word forms and, by default, embeddings rank source windows. Linked L′/notes help locate them. Whole windows with neighboring fragments are selected to the soft target, overlaps merge, and results follow source order. Edited or source-less summaries can appear as labelled memories. |
+| **Raw tail: 8,000 + protection** | Recent whole exchanges stay verbatim. By default, the latest **1 completed exchange** and any unanswered post are protected from summarization/automatic hiding and excluded from that 8,000-token count. More originals can remain while older packets await processing. |
+| **WI in the RP request** | Entry text is stored, but activation is checked each turn. Enabled Constant entries need no keyword trigger; other entries depend on keys and conditions. Native ST rules and budget still apply. RussianWI adds word forms; semantic WI is off by default. Generated WI defaults to System at in-chat depth 2; author entries retain their own positions. Retrieved history is not itself added to the WI scan by default. |
+| **Stable instructions** | System prompt, character, persona and enabled service instructions use the remaining space. Max history tokens does not set their size. |
+
+### Inside History: from search to the 8,000-token segment
+
+![History cutaway: retrieval, whole-window selection, merging overlaps and chronological fill bar](docs/assets/history-cutaway-en.svg)
+
+Search first ranks candidates by relevance. WorldMemory then selects whole original-text windows, merges overlaps, and sends the selection **in source-message order**, not rank order. The wrapper and labels also count toward Max history tokens. Other candidates remain archived; there is no fixed fragment count. Linked L′/notes help selection but are not added as a complete timeline in the prompt.
+
+**Two different WI budgets:** **WI context allowance = 20%** applies to the **separate summarizer request**. With Source tokens per summary = 24,000, that allows up to **4,800 WI tokens**. It does not reserve 20% of the RP prompt. Configure the ordinary RP WI budget in ST's own World Info settings. Likewise, 24,000 source tokens is not the complete background request size: previous L0, instructions and selected WI add overhead.
+
+These are fresh-install defaults; updates/imports can retain your earlier settings. Indexes and vectors are reused: the selection is rebuilt each turn, not the entire archive. There is no extra LLM judge/verifier call for each RP reply.
+
 ## Two paths: saving memory and answering a turn
 
 **When an older packet is ready** — two sequential summarizer calls, not two calls on every RP turn:
 
 ```mermaid
 flowchart TD
-    O["Older original messages"] --> A["1 · Generate L0 → save archive"]
+    O["Older source packet<br/>Source tokens per summary: 24,000"] --> A["1 · Generate L0 → save archive"]
     P["Immediately preceding L0"] --> A
     A --> B["2 · Generate L′, search excerpts<br/>and optional WI updates"]
     O --> B
@@ -46,18 +71,29 @@ The archive, source links, index and WI are stored/managed on your ST installati
 
 ```mermaid
 flowchart TD
-    Q["Current player post"] --> R["Search archived sources<br/>Words + optional embeddings"]
-    I["Raw index + linked ranking aids"] --> R
-    R --> H["Selected original excerpts<br/>In story order"]
-    Q --> S["Native WI scan<br/>Keys / Constant / rules / budget"]
-    W["Connected WI books"] --> S
-    F["Optional RussianWI<br/>Local word forms"] -.-> S
-    V["Optional semantic WI<br/>Embedding candidates; off by default"] -.-> S
-    S --> X["Active WI entries"]
-    H --> G["ST assembles the RP prompt"]
-    X --> G
-    C["Character + setup<br/>Raw recent tail + current post"] --> G
-    G --> M["RP model · API or local<br/>Ordinary chat reply"]
+        C["System, character, persona<br/>And extension instruction templates"]
+        I["Originals + L0 + L′ / search notes<br/>Search index and cached vectors"]
+        W["Connected WI entry texts"]
+        Q["Latest player post text"] --> R["Search: words + query embedding<br/>Saved notes help rank sources"]
+        R --> H["Select original windows up to ~8,000 tokens<br/>Merge overlaps → story order"]
+        T["Recent original messages: ~8,000<br/>Plus protected exchange"]
+        S["Native WI scan of ST context<br/>Constant + keys + rules + budget"]
+        S --> X["WI entries activated for this turn"]
+        G["ST assembles the final input<br/>Default: memory immediately before chat<br/>WI keeps its configured positions"]
+        H --> G
+        T --> G
+        X --> G
+    I --> R
+    W --> S
+    Q --> S
+    T --> S
+    Q --> G
+    C --> G
+    G --> M["One ordinary RP generation request<br/>API or local model"]
+    classDef saved fill:#e8f5e9,stroke:#387644,color:#142b1a;
+    classDef rebuilt fill:#fff3cd,stroke:#947214,color:#30270d;
+    class C,I,W saved;
+    class Q,R,H,T,S,X,G rebuilt;
 ```
 
 Prompt ingredients are **character/setup + selected history excerpts + raw tail + active WI + current post**; actual placement follows your ST/WorldMemory settings. L′ helps rank sources; it is not automatically inserted as a timeline, and the full archive is not sent. Manual edits and summaries without originals can appear as explicitly labelled memories. Ranking and source-span checks are local; retrieval needs no extra LLM verifier. With semantic search enabled, query embeddings may call the chosen service each turn (cached inputs are reused). Native keyword/Constant activation and RussianWI word forms run locally; semantic WI only adds candidates to that same native scan.
