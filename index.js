@@ -28,6 +28,7 @@ const status = text => { const node = document.getElementById('wm_status'); if (
 const settings = () => {
     const value = ctx().extensionSettings[OWNER] ??= {};
     if (!value.archiveConfigVersion) {
+        const historyWasDisabled = value.history === false && value.injectionPosition === undefined;
         const previous = ctx().extensionSettings.summaryception || {};
         for (const key of ['retainedContextTokens','batchContextTokens','blindZoneExchanges','ghostUserMessages','ghostAssistantMessages',
             'reapplyGhostingOnSummary','pauseSummarization','connectionSource','connectionProfileId','summarizerStreaming','summarizerResponseLength',
@@ -37,7 +38,8 @@ const settings = () => {
             if (value[key] === undefined && previous[key] !== undefined) value[key] = structuredClone(previous[key]);
         }
         value.historyMaxTokens ??= (Number(value.historyBaseTokens) || 4000) + (Number(value.historyZoomTokens) || 4000);
-        value.archiveConfigVersion = 1; value.history = true;
+        if (historyWasDisabled) value.injectionPosition = -1;
+        value.archiveConfigVersion = 1;
     }
     for (const [key, initial] of Object.entries(defaults)) if (value[key] === undefined) value[key] = initial;
     return value;
@@ -972,7 +974,7 @@ async function init() {
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),
         prepareHistory: prepareContext, inspectHistory: () => history.inspect(), inspectSemanticWI: () => semanticWI.inspect(),
         getStatus: () => ({ busy, book: state()?.book || null, enabled: settings().enabled,
-            history: Boolean(settings().enabled),
+            history: Boolean(settings().enabled && settings().injectionPosition !== -1),
             summaryWI: Boolean(settings().enabled && settings().auto),
             summaryMetadata: Boolean(settings().enabled && (settings().history || settings().auto)),
             wiPending: Object.values(state()?.wiPackets || {}).filter(item => item.status !== 'applied').length }) });

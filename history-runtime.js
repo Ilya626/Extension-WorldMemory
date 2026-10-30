@@ -35,7 +35,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     } });
     function invalidate() { serial++; controller?.abort(); prepared = null; injection.clear(); }
     function syncHints(enabled = false) {
-        ctx().setExtensionPrompt('world_memory_hint', enabled && settings().enabled && settings().hints ? HINT_PROMPT : '', 1, 0, false, 0);
+        ctx().setExtensionPrompt('world_memory_hint', enabled && settings().enabled && settings().injectionPosition !== -1 && settings().hints ? HINT_PROMPT : '', 1, 0, false, 0);
         const scripts = ctx().extensionSettings.regex ??= [], index = scripts.findIndex(script => script.id === REGEX_ID);
         if (settings().enabled && settings().hints) {
             const script = { id: REGEX_ID, scriptName: 'World Memory: hide service hint', findRegex: '/<memory_hint>[\\s\\S]*$/gi', replaceString: '',

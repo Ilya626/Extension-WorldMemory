@@ -4,7 +4,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.3.0 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.3.1 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 ## What the model receives
 
@@ -74,6 +74,8 @@ The default source packet is 24,000 tokens. The raw tail and **BlindZone (recent
 ## Update or migrate
 
 Export **WorldMemory → Portable backup → Export backup**, and export the ST chat separately to retain originals and swipes. Update **World Memory** through ST's extension manager, then reload. **Existing preferences are preserved**; updating does not enable semantic search if you previously disabled it.
+
+Previously disabled history migrates to **Advanced history insertion → Insert retrieved history → Off — do not send history**. To enable it, choose an insertion position there, for example **Immediately before chat history**.
 
 For an existing Summaryception setup, WorldMemory imports the saved archive and relevant settings. If the old extension is active, WorldMemory saves the import, disables the old runtime and reloads once. Inspect **L0 archive** before continuing; do not run both archive writers for the same chat. Imported summaries without available originals remain summary-only.
 

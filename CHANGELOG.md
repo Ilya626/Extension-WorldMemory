@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-10-30
+
+- Preserve disabled history when migrating from the pre-standalone extension: translate it to the current **Off — do not send history** control, without overwriting an existing insertion choice. Off also stops requesting hidden search hints. Missing settings still receive the new defaults.
+
 ## 0.3.0 — 2026-10-30 — standalone preview
 
 - Run WorldMemory without Summaryception. Keep a growing, source-linked L0 archive and import supported legacy memory without running layer transfers.
