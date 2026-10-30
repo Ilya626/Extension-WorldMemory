@@ -29,6 +29,10 @@ test('global chronology includes unqueried story sections in source order', asyn
     assert.equal(result.spineInfo.complete, true);
     assert.equal(result.selected.length, 0);
     assert.equal(currentStorySpine(p1), p1.storySpine);
+    const visibleOriginal = await selectHistory(nodes, [], { targetTokens: 8000, countTokens,
+        storyNodes: archiveStoryNodes(snapshot), excludedSourceIds: [first.id] });
+    assert.ok(visibleOriginal.text.includes('A bridge closed.'));
+    assert.ok(visibleOriginal.text.includes('A decision remains pending.'));
     // The reader baseline remains available when the independent search times out.
     const previousDocument = globalThis.document, previousFetch = globalThis.fetch;
     const events = { MESSAGE_RECEIVED: 'reply', GENERATION_ENDED: 'end', CHAT_COMPLETION_PROMPT_READY: 'cc',
@@ -58,7 +62,7 @@ test('global chronology includes unqueried story sections in source order', asyn
     }
 });
 
-test('a partial raw hit expands its bounded cell in place and retains other cells', async () => {
+test('a raw hit adds bounded original detail after its step and retains the entire skeleton', async () => {
     const original = source('long', 3, ('A messenger waits for the conditional reply. ').repeat(24));
     const p = packet('scene', [original], undefined, { maxCharacters: 256 });
     const handles = storySpineSources([original], { maxCharacters: 256 }), middle = Math.floor(handles.length / 2);
@@ -66,13 +70,13 @@ test('a partial raw hit expands its bounded cell in place and retains other cell
     const result = await selectHistory(archiveHistoryNodes({ packets: [p] }), [hit(p, original, chosen.start + 2, chosen.start + 8)],
         { targetTokens: 8000, countTokens });
     assert.equal(result.spineInfo.expanded, 1);
-    assert.ok(!result.text.includes(`Chronological step ${middle + 1}.`));
+    assert.ok(result.text.includes(`Chronological step ${middle + 1}.`));
     assert.ok(result.text.includes(`Chronological step ${middle}.`));
     assert.ok(result.text.includes(`Chronological step ${middle + 2}.`));
     const raw = result.blocks.find(b => b.kind === 'raw');
     assert.deepEqual(raw.sourceSpans, [chosen]);
     assert.ok(raw.text.includes(handles[middle].text));
-    assert.equal(result.blocks.length, handles.length);
+    assert.equal(result.blocks.length, handles.length + 1);
     // Adjoining technical parts may share a step; a partial hit restores that
     // whole merged range, while the following compact steps stay in place.
     const grouped = [handles.slice(0, 2), ...handles.slice(2).map(handle => [handle])];
@@ -86,7 +90,8 @@ test('a partial raw hit expands its bounded cell in place and retains other cell
     assert.deepEqual(expanded.blocks.find(b => b.kind === 'raw').sourceSpans, [mergedSpan]);
     assert.ok(expanded.text.includes(original.text.slice(mergedSpan.start, mergedSpan.end)));
     assert.ok(expanded.text.includes('Grouped step 1.'));
-    assert.ok(!expanded.text.includes('Grouped step 0.'));
+    assert.ok(expanded.text.includes('Grouped step 0.'));
+    assert.ok(expanded.text.indexOf('Grouped step 0.') < expanded.text.indexOf(original.text.slice(mergedSpan.start, mergedSpan.end)));
     const differentMessages = storySpineSources([source('x', 1, 'A condition.'), source('y', 2, 'A later answer.')]);
     const invalid = readStorySpine(`${p.text}\n<story_spine>{"nodes":[{"text":"Mixed messages","src":["s1","s2"]}]}</story_spine>`, differentMessages);
     assert.equal(invalid.storySpine, null);

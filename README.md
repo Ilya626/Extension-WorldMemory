@@ -35,7 +35,7 @@ The bar is a **numeric example** for a fresh installation: history 8,000 + raw t
 
 | Part | How it is assembled |
 | --- | --- |
-| **History: 8,000** | First assemble the complete available chronological L″. Independently rank originals using the player post, words/lemmas and embeddings. Hits expand their bounded source cells in place; other steps remain compact. The skeleton and labels consume the allowance first, then whole expansions use the remainder. Overflow is reported. |
+| **History: 8,000** | First assemble the complete available chronological L″. Independently rank originals using the player post, words/lemmas and embeddings. Every compact skeleton step stays present. Retrieved passages are added immediately after their matching steps. The skeleton and labels consume the allowance first, then whole expansions use the remainder. Overflow is reported. |
 | **Raw tail: 8,000 + protection** | Recent whole exchanges stay verbatim. By default, the latest **1 completed exchange** and any unanswered post are protected from summarization/automatic hiding and excluded from that 8,000-token count. More originals can remain while older packets await processing. |
 | **WI in the RP request** | Entry text is stored, but activation is checked each turn. Enabled Constant entries need no keyword trigger; other entries depend on keys and conditions. Native ST rules and budget still apply. RussianWI adds word forms; semantic WI is off by default. Generated WI defaults to System at in-chat depth 2; author entries retain their own positions. Retrieved history is not itself added to the WI scan by default. |
 | **Stable instructions** | System prompt, character, persona and enabled service instructions use the remaining space. Max history tokens does not set their size. |
@@ -44,7 +44,7 @@ The bar is a **numeric example** for a fresh installation: history 8,000 + raw t
 
 ![History cutaway: retrieval, whole-window selection, merging overlaps and chronological fill bar](docs/assets/history-cutaway-en.svg)
 
-The request contains one timeline: **compact A → expanded B → compact C → expanded D**, followed by recent raw chat. L″ gives the answering model the whole story; L′/search notes support retrieval and do not replace chronology. Search failure keeps the skeleton. Manually visible archived messages can repeat; a warning and reader instruction retain their status as older events. Removing them before final ST trimming could lose their only representation.
+The request contains one timeline: **step A → step B + details B → step C → step D + details D**, followed by recent raw chat. The entire short L″ always remains in the prompt, giving the answering model the whole story; L′/search notes support retrieval and do not replace chronology. Search failure keeps the skeleton. Manually visible archived messages can repeat; a warning and reader instruction retain their status as older events. Removing them before final ST trimming could lose their only representation.
 
 **Two different WI budgets:** **WI context allowance = 20%** applies to the **separate summarizer request**. With Source tokens per summary = 24,000, that allows up to **4,800 WI tokens**. It does not reserve 20% of the RP prompt. Configure the ordinary RP WI budget in ST's own World Info settings. Likewise, 24,000 source tokens is not the complete background request size: previous L0, instructions and selected WI add overhead.
 
@@ -79,7 +79,7 @@ flowchart TD
         J["Saved L″: compact chronology of the whole game"]
         W["Connected WI entry texts"]
         Q["Latest player post text"] --> R["Search: words + query embedding<br/>Saved notes help rank sources"]
-        R --> H["Expand original source cells in place within L″<br/>Shared history soft target ~8,000"]
+        R --> H["Complete L″ + details after matching steps<br/>Shared history soft target ~8,000"]
         J --> H
         T["Recent original messages: ~8,000<br/>Plus protected exchange"]
         S["Native WI scan of ST context<br/>Constant + keys + rules + budget"]

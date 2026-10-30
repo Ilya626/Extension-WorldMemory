@@ -37,26 +37,23 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
     storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false }) {
     const target = Math.max(0, Number(targetTokens) || 0), excluded = new Set(excludedSourceIds);
     const sourceMap = new Map(storyNodes.flatMap(node => node.sources || []).map(source => [source.id, source]));
-    const cells = storySpineCells(storyNodes).filter(cell => !cell.sourceSpans.length
-        || !cell.sourceSpans.every(span => excluded.has(span.sourceId)));
+    const cells = storySpineCells(storyNodes);
     const bySource = new Map();
     for (const cell of cells) for (const span of cell.sourceSpans) {
         if (!bySource.has(span.sourceId)) bySource.set(span.sourceId, []);
         bySource.get(span.sourceId).push({ cell, span });
     }
-    const prefix = 'Earlier story in source order. Short steps are saved summaries; expanded steps quote their originals in place. Plans, claims, private thoughts and out-of-character scenario notes retain their original status. […] marks omitted source text. '
+    const prefix = 'Complete earlier-story skeleton in source order. Every short step remains present. Supporting original passages follow their matching step as details of that same event, not additional later events. Plans, claims, private thoughts and out-of-character scenario notes retain their original status. […] marks omitted source text. '
         + (nativeOverlap ? 'Some archived originals are also visible in the separate chat. Those repeated older messages belong to their original events, not new events after this timeline. Only genuinely later events supersede earlier state.\n'
             : 'The separate recent chat continues this chronology and supersedes older state.\n');
     function render(expanded) {
         const blocks = [];
         for (const cell of cells) {
-            if (!expanded.has(cell.id)) {
-                blocks.push({ order: cell.order, start: cell.start, text: cell.kind === 'compact'
-                    ? `[Story step]\n${cell.text}` : cell.kind === 'compact-summary'
-                        ? `[Earlier saved-summary step; original unavailable]\n${cell.text}` : cell.text,
-                    sourceSpans: [], spineIds: [cell.id], kind: cell.kind });
-                continue;
-            }
+            blocks.push({ order: cell.order, start: cell.start, text: cell.kind === 'compact'
+                ? `[Story step]\n${cell.text}` : cell.kind === 'compact-summary'
+                    ? `[Earlier saved-summary step; original unavailable]\n${cell.text}` : cell.text,
+                sourceSpans: [], spineIds: [cell.id], kind: cell.kind });
+            if (!expanded.has(cell.id)) continue;
             for (const span of cell.sourceSpans) {
                 if (excluded.has(span.sourceId)) continue;
                 const source = sourceMap.get(span.sourceId);
@@ -76,15 +73,12 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
     }
     function rawBlock(source, span) {
         const role = source.sourceKind === 'worldbook' ? 'imported worldbook' : source.isUser ? 'player post' : 'narrator post';
-        return `[Original message ${source.index}; ${source.name || 'Narrator'}; ${role}]\n`
+        return `[Original message ${source.index}; ${source.name || 'Narrator'}; ${role}; supporting detail for the preceding story step]\n`
             + (span.start ? '[…]\n' : '') + source.text.slice(span.start, span.end)
             + (span.end < source.text.length ? '\n[…]' : '');
     }
-    // A legacy paragraph cannot be subtracted by source offsets. If recent raw
-    // chat covers part of it, render its remaining originals instead of repeating
-    // the whole paragraph alongside that same raw tail.
-    let expanded = new Set(cells.filter(cell => cell.kind === 'legacy' && cell.expandable
-        && cell.sourceSpans.some(span => excluded.has(span.sourceId))).map(cell => cell.id));
+    // The complete skeleton is fixed. Retrieval only adds supporting passages.
+    let expanded = new Set();
     let result = render(expanded), tokens = result.text ? await countTokens(format(result.text)) : 0;
     const baselineTokens = tokens, selected = [], ids = new Set();
     for (const candidate of ranked) {
