@@ -23,6 +23,45 @@ Raw chat and retrieved history have separate allowances. Whole history fragments
 
 **History answers “what happened?”; WI answers “who or what is this?”** History can recover a conversation in which a workshop keeper lent a visitor a key until morning. The keeper's WI entry describes the person, workshop and relevant relationships. It is reusable reference, not another scene-by-scene diary.
 
+## Two paths: saving memory and answering a turn
+
+**When an older packet is ready** — two sequential summarizer calls, not two calls on every RP turn:
+
+```mermaid
+flowchart TD
+    O["Older original messages"] --> A["1 · Generate L0 → save archive"]
+    P["Immediately preceding L0"] --> A
+    A --> B["2 · Generate L′, search excerpts<br/>and optional WI updates"]
+    O --> B
+    B --> N["L′ + source-linked search notes<br/>Ranking aids, not prompt history"]
+    O --> I["Source-linked raw search index"]
+    N --> I
+    B -. "WI enabled" .-> W["Separate native WI book"]
+    I <--> E["Embeddings: API by default<br/>or optional local service"]
+```
+
+The archive, source links, index and WI are stored/managed on your ST installation. Calls 1–2 use your summarizer connection: remote API or a local model. Embeddings send index text and queries to the selected API or local service; only new/changed inputs need new vectors, and cached vectors are reused. This preparation can also be started manually.
+
+**For each ordinary RP reply** — local retrieval and native WI activation feed the regular ST request:
+
+```mermaid
+flowchart TD
+    Q["Current player post"] --> R["Search archived sources<br/>Words + optional embeddings"]
+    I["Raw index + linked ranking aids"] --> R
+    R --> H["Selected original excerpts<br/>In story order"]
+    Q --> S["Native WI scan<br/>Keys / Constant / rules / budget"]
+    W["Connected WI books"] --> S
+    F["Optional RussianWI<br/>Local word forms"] -.-> S
+    V["Optional semantic WI<br/>Embedding candidates; off by default"] -.-> S
+    S --> X["Active WI entries"]
+    H --> G["ST assembles the RP prompt"]
+    X --> G
+    C["Character + setup<br/>Raw recent tail + current post"] --> G
+    G --> M["RP model · API or local<br/>Ordinary chat reply"]
+```
+
+Prompt ingredients are **character/setup + selected history excerpts + raw tail + active WI + current post**; actual placement follows your ST/WorldMemory settings. L′ helps rank sources; it is not automatically inserted as a timeline, and the full archive is not sent. Manual edits and summaries without originals can appear as explicitly labelled memories. Ranking and source-span checks are local; retrieval needs no extra LLM verifier. With semantic search enabled, query embeddings may call the chosen service each turn (cached inputs are reused). Native keyword/Constant activation and RussianWI word forms run locally; semantic WI only adds candidates to that same native scan.
+
 ## Install and connect
 
 1. In SillyTavern, open **Extensions → Install extension** and paste:
