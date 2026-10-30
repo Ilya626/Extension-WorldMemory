@@ -11,7 +11,7 @@ import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudg
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 
-const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, alwaysMain: true, language: 'auto', targetTokens: 160,
+const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
     history: true, hints: true, historySemantic: true, historySpineRerank: false, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
     historyMaxTokens: 8000, promptTargetTokens: 24000, retainedContextTokens: 8000, batchContextTokens: 24000, blindZoneExchanges: 1,

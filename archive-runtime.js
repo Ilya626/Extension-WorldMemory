@@ -8,7 +8,8 @@ import { stripReasoningBlocks, requireModelOutput, getModelOutputIssue } from '.
 import { metadataSources, readMemoryMetadata, memoryTextRevision, MEMORY_METADATA_INSTRUCTION } from './vendor/summaryception/memory-metadata.js';
 import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget } from './vendor/summaryception/world-info-context.js';
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
-import { KNOWLEDGE_BOUNDARIES_INSTRUCTION, readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
+import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
+import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
 
 const CONTINUITY = `The previous_l0 (or prior_context) is the COMPLETE immediately preceding saved L0, supplied as continuity context and a style example. Continue its narrative thread with the new source packet. Preserve necessary referents and unresolved conditions without recopying the whole previous summary. For the first packet there is no previous L0.
 Only new_sources (or passage_in_question) are witnesses for this packet's new events, search excerpts and WI contributions. previous_l0 is a saved account, not an additional source handle or independent proof. Do not turn its claims into newly observed events. Preserve thoughts versus speech, plans versus outcomes, attribution, identity and limiting conditions. Do not continue the roleplay.`;
@@ -249,7 +250,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 knowledge = await wait(Promise.resolve(prepareKnowledge({ before: Math.min(...sources.map(source => source.index)) })), owner); guard(owner);
             } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Saved L0 and ordinary metadata are kept.`); }
             const system = [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wi?.systemPrompt,
-                knowledge?.knowledge_characters?.length ? KNOWLEDGE_BOUNDARIES_INSTRUCTION : null,
+                knowledge?.knowledge_characters?.length ? `${AWARENESS_INSTRUCTION.replace('Optionally return', 'Return')}\nFor this enabled information-event preparation, include the awareness array in the same metadata object. Return awareness: [] if no supported events qualify; do not omit the field.` : null,
                 'This is stage 2. The saved L0 prose is immutable and is a draft navigation aid, not independent proof. Return ONLY one <memory_metadata> JSON block, with no L0 prose. Search excerpts and this packet\'s WI contributions must be supported by the supplied new_sources, not by the saved L0 or retained prior references. With no original sources use saved_summary only for Lprime, return facts: [], and omit WI claims.'].filter(Boolean).join('\n\n');
             const prompt = JSON.stringify({ task: 'Annotate this already saved L0. Do not regenerate or rewrite its prose.',
                 saved_summary: record.text, source_status: sources.length ? 'linked' : 'summary-only',
@@ -267,7 +268,16 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const boundaries = knowledge ? readKnowledgeBoundaries({ epistemic: parsed.epistemic }, localSources,
                 { resolveCharacter: knowledge.resolveCharacter, packetId: record.id }) : { epistemic: null, warnings: [] };
             const previousKnowledge = record.memoryMetadata?.epistemic || [];
+            const awareness = knowledge ? readAwarenessEvents({ awareness: parsed.awareness }, localSources,
+                { resolveCharacter: knowledge.resolveCharacter, packetId: record.id }) : { awareness: null, warnings: [] };
+            if (knowledge?.knowledge_characters?.length && parsed.awareness === undefined) {
+                awareness.warnings.push('Information-event preparation was requested but awareness was omitted. Saved L0, valid search notes and WI were kept.');
+            }
             const metadata = { ...parsed.metadata, textRevision: memoryTextRevision(record.text),
+                awareness: mergeAwarenessEvents(record.memoryMetadata?.awareness, awareness.awareness),
+                awarenessWarnings: awareness.warnings,
+                awarenessPrepared: Boolean(knowledge?.knowledge_characters?.length && Array.isArray(parsed.awareness)
+                    && (parsed.awareness.length === 0 || awareness.awareness?.length) && !awareness.warnings.length),
                 epistemic: mergeKnowledgeBoundaries(previousKnowledge, boundaries.epistemic),
                 epistemicWarnings: boundaries.warnings,
                 epistemicPrepared: Boolean(knowledge?.knowledge_characters?.length && Array.isArray(parsed.epistemic)
@@ -276,14 +286,14 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
                 ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
             if (!sources.length) delete metadata.wi;
-            if (boundaries.warnings.length) warn(boundaries.warnings.join(' '));
+            if (boundaries.warnings.length || awareness.warnings.length) warn([...boundaries.warnings, ...awareness.warnings].join(' '));
             const complete = !parsed.warning && Boolean(metadata.lprime?.text && (!wi || metadata.wi));
             putPacket(owner.archive, { ...record, memoryMetadata: metadata, annotationStatus: complete ? 'complete' : 'partial',
                 annotationError: parsed.warning || (complete ? null : 'Some optional metadata is missing; retry stage 2 only.'),
                 annotationUsage: response.usage || null, annotationTokenCount: response.tokenCount ?? null });
             await persist(owner, 'metadata-only', record.id);
             const packet = readPacket(owner.archive, record.id);
-            return { packet, warning: [parsed.warning || packet.annotationError, ...boundaries.warnings].filter(Boolean).join(' ') || null };
+            return { packet, warning: [parsed.warning || packet.annotationError, ...boundaries.warnings, ...awareness.warnings].filter(Boolean).join(' ') || null };
         } catch (error) {
             // Stage 1 is already durable. Mark a retryable annotation without overwriting later edits.
             if (!owner.controller.signal.aborted && ctx().chatMetadata === owner.metadata && getArchive() === owner.archive
@@ -378,7 +388,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 (!selected || selected.includes(packet.id)) && (options.force || packet.annotationStatus === 'pending'
                 || packet.annotationStatus === 'partial' || packet.annotationError || !packet.memoryMetadata?.lprime?.text
                 || (hasKnowledgeCharacters && !packet.stale && packet.sourceStatus === 'linked'
-                    && !packet.memoryMetadata?.epistemicPrepared)
+                    && !packet.memoryMetadata?.awarenessPrepared)
                 || packet.memoryMetadata.factMode !== 'verbatim-excerpts-v1'
                 || (packet.memoryMetadata.sourceStatus === 'summary-only' && !packet.stale && packet.sourceStatus === 'linked')
                 || (options.includeWI !== false && config().auto !== false && prepareReferences && !packet.stale
