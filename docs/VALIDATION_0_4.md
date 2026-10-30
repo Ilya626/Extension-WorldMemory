@@ -20,6 +20,20 @@ All assemblies exceeded their soft envelope by a final whole window; the maximum
 
 The optional ranking control is **off by default**. Actual-model comparisons must assess whether the supplied evidence improves the reply, independently of the positional proxy score.
 
+## Actual Flash reply pilot
+
+**Five pairs / ten Flash 3.8 requests**, all completed normally, with no retries or new embedding requests. Each pair used the same complete outline, character/setup, recent chat and player input; only the selected original details changed. Cases were selected before replies from existing retrieval examples, including a known gain and loss. This is a directed diagnostic sample, not a blind win-rate benchmark.
+
+- **Three natural player posts:** one concrete gain reached the reply; two pairs preserved their main facts without a clear overall winner. Both arms still sometimes invented existing rules or spoke for the player.
+- **Two question triples, assessed separately:** one recovered a missing motivation; the other reproduced a lost later condition. These are diagnostic questions, not additional natural RP wins.
+- A wrong statement in a shared generated outline propagated into a reply. This is a compression defect, distinct from a retrieval miss. Exact original evidence should control conditions and attribution, but the reply model can still fail to follow it.
+
+The provider reported **13,357–15,747 prompt tokens**, while the serialized-message `cl100k_base` reference counted **19,946–23,109**. These counters are not interchangeable. Requests used the frozen measured selector revision; later label-only product changes are not qualified by those calls. This was an external reply pilot using real card/chat material, not a native ST final-trimming qualification. Observed cost: **0.20 CNY**.
+
+## Native import and UI
+
+Both private prepared archives were imported, opened and reloaded in an isolated SillyTavern with runtime **0.4.0**. L0, original messages, source links, all 59 outlines and native WI matched after reload. Desktop 1200px and mobile-width 400px inspection showed accessible outline controls/status without horizontal page overflow. No model or embedding requests were needed. A 400px desktop render is not a physical-phone qualification.
+
 ## Product boundaries / границы
 
 The entire available L″ stays in history-enabled prompts; missing/stale/manual legacy material is labelled. Unknown original order is not presented as proven chronology. Max history and full-prompt targets remain soft; native ST/provider context limits still apply.
