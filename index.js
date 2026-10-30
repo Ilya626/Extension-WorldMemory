@@ -391,11 +391,12 @@ async function applyPacket(packet, book, packets, metadata, savedWI = false) {
     const samePacket = state().packets[packet.id] === packetSignature(packet);
     const revisedUids = new Set(updates.filter(update => update.facts && update.uid !== null).map(update => update.uid));
     for (const entry of ownedEntries(next, state().owner)) {
-        const manual = detectManual(entry);
+        // Reapplying a packet must preserve a manual entry's existing provenance.
+        // Actual source removal/invalidation is handled by removePackets.
+        if (detectManual(entry)) continue;
         if (entryMeta(entry).contributions[packet.id] && (savedWI || !samePacket || revisedUids.has(entry.uid))) {
             delete entryMeta(entry).contributions[packet.id]; affected.add(entry.uid);
         }
-        if (manual) affected.delete(entry.uid);
     }
     for (const update of updates) {
         // A null UID must not create a second automatic profile over an explicitly manual subject.

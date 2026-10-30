@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.3.2 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.3.3 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 ## What the model receives
 

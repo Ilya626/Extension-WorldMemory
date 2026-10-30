@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 — 2026-10-30
+
+- Keep a manually edited WI record's source links when reapplying saved WI. Actual source removal or invalidation still retracts the affected links; manual text remains untouched.
+
 ## 0.3.2 — 2026-10-30
 
 - Recover a search excerpt when the model added an outer `*`: accept only a uniquely located original substring in the cited message, retaining its original text and offsets. Source handles, spelling and internal text are not corrected. Saved L0 and WI are unchanged.
