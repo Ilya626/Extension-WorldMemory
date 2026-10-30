@@ -1,33 +1,23 @@
 // A bounded view of an unbounded archive. This module never edits saved memory.
 import { hash } from './history.js';
-
-function merge(ranges) {
-    const result = [];
-    for (const span of ranges.slice().sort((a, b) => a.start - b.start)) {
-        const last = result.at(-1);
-        if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
-        else result.push({ start: span.start, end: span.end });
-    }
-    return result;
-}
-function wholeSentences(source, span) {
-    const ends = [...source.matchAll(/[.!?…]+[»”"'’)\]]*(?:\s+|$)|\n+/gu)].map(match => match.index + match[0].length);
-    const start = [...ends].reverse().find(end => end <= span.start) ?? 0;
-    const end = ends.find(end => end >= span.end) ?? source.length;
-    return { start, end };
-}
+import { storySpineCells } from './story-spine.js';
 
 /** Only sources actually present in the snapshot can become original excerpts. */
-export function archiveHistoryNodes(snapshot) {
-    return snapshot.packets.filter(packet => !packet.stale).map(packet => ({
+export function archiveStoryNodes(snapshot) {
+    return snapshot.packets.map(packet => ({
         id: packet.id, order: packet.order, sourceIds: packet.sourceMessageIds || [],
-        sources: (packet.sources || []).filter(source => !source.hidden),
+        sources: packet.sources || [], stale: Boolean(packet.stale), kind: packet.kind,
+        storySpine: packet.storySpine || null,
         detail: packet.text || '', compact: packet.memoryMetadata?.lprime?.text || '',
         facts: Array.isArray(packet.memoryMetadata?.facts) ? packet.memoryMetadata.facts : [],
         keys: packet.memoryMetadata?.lprime?.keys || [],
         summaryOnly: packet.sourceStatus === 'summary-only' || !packet.sources?.length,
         manual: Boolean(packet.manual || packet.kind === 'manual'),
     }));
+}
+export function archiveHistoryNodes(snapshot) {
+    return archiveStoryNodes(snapshot).filter(node => !node.stale).map(node => ({ ...node,
+        sources: node.sources.filter(source => !source.hidden) }));
 }
 
 /** A packet-wide paraphrase cannot be redacted by raw offsets. Suppress it if any witness is unavailable. */
@@ -43,53 +33,84 @@ export function historyPacketThreads(nodes) {
 }
 
 /** targetTokens excludes the live raw tail, WI and system/card. It is a soft target. */
-export async function selectHistory(nodes, ranked, { targetTokens, countTokens, format = text => text }) {
-    const target = Math.max(0, Number(targetTokens) || 0);
-    const hidden = new Set(nodes.flatMap(node => (node.sources || []).filter(source => source.hidden).map(source => source.id)));
-    const sources = new Map(nodes.filter(node => !node.hidden && !node.stale).flatMap(node => node.sources || [])
-        .filter(source => !hidden.has(source.id)).map(source => [source.id, source]));
-    const prefix = 'Earlier history, selected sources in chronological order. These quotations may include plans, claims, private thoughts and out-of-character scenario notes; they do not establish shared knowledge or turn unplayed material into events. […] marks omitted source text. Later events and the current chat supersede earlier state.\n';
-    function render(selected) {
-        const bySource = new Map(), summaries = new Map(), blocks = [];
-        for (const doc of selected) {
-            if (doc.kind === 'raw') for (const span of doc.sourceSpans || []) {
-                const source = sources.get(span.sourceId);
-                if (!source || span.sourceRevision !== hash(source.text) || span.offsetUnit !== 'utf16'
-                    || span.start < 0 || span.end > source.text.length || span.end <= span.start) continue;
-                if (!bySource.has(source.id)) bySource.set(source.id, []);
-                bySource.get(source.id).push(wholeSentences(source.text, span));
+export async function selectHistory(nodes, ranked, { targetTokens, countTokens, format = text => text,
+    storyNodes = nodes, excludedSourceIds = [] }) {
+    const target = Math.max(0, Number(targetTokens) || 0), excluded = new Set(excludedSourceIds);
+    const sourceMap = new Map(storyNodes.flatMap(node => node.sources || []).map(source => [source.id, source]));
+    const cells = storySpineCells(storyNodes).filter(cell => !cell.sourceSpans.length
+        || !cell.sourceSpans.every(span => excluded.has(span.sourceId)));
+    const bySource = new Map();
+    for (const cell of cells) for (const span of cell.sourceSpans) {
+        if (!bySource.has(span.sourceId)) bySource.set(span.sourceId, []);
+        bySource.get(span.sourceId).push({ cell, span });
+    }
+    const prefix = 'Earlier story in source order. Short steps are saved summaries; expanded steps quote their originals in place. Plans, claims, private thoughts and out-of-character scenario notes retain their original status. […] marks omitted source text. The separate recent chat continues this chronology and supersedes older state.\n';
+    function render(expanded) {
+        const blocks = [];
+        for (const cell of cells) {
+            if (!expanded.has(cell.id)) {
+                blocks.push({ order: cell.order, start: cell.start, text: cell.kind === 'compact'
+                    ? `[Story step]\n${cell.text}` : cell.kind === 'compact-summary'
+                        ? `[Earlier saved-summary step; original unavailable]\n${cell.text}` : cell.text,
+                    sourceSpans: [], spineIds: [cell.id], kind: cell.kind });
+                continue;
             }
-            else if (doc.kind === 'memory' && !summaries.has(doc.id)) summaries.set(doc.id, doc);
+            for (const span of cell.sourceSpans) {
+                if (excluded.has(span.sourceId)) continue;
+                const source = sourceMap.get(span.sourceId);
+                const last = blocks.at(-1);
+                if (last?.kind === 'raw' && last.sourceSpans.at(-1)?.sourceId === span.sourceId
+                    && last.sourceSpans.at(-1).end === span.start) {
+                    const previous = last.sourceSpans.at(-1);
+                    previous.end = span.end;
+                    // Rebuild from merged exact ranges rather than appending text to a trailing omission marker.
+                    last.text = rawBlock(source, previous);
+                    last.spineIds.push(cell.id);
+                } else blocks.push({ order: source.index, start: span.start, text: rawBlock(source, span),
+                    sourceSpans: [{ ...span }], spineIds: [cell.id], kind: 'raw' });
+            }
         }
-        for (const [id, ranges] of bySource) {
-            const source = sources.get(id);
-            const spans = merge(ranges), complete = spans.length === 1 && spans[0].start === 0 && spans[0].end === source.text.length;
-            const role = source.sourceKind === 'worldbook' ? 'imported worldbook' : source.isUser ? 'player post' : 'narrator post';
-            const excerpts = spans.map(range => source.text.slice(range.start, range.end)).join('\n[…]\n');
-            const text = `${spans[0].start ? '[…]\n' : ''}${excerpts}${spans.at(-1).end < source.text.length ? '\n[…]' : ''}`;
-            blocks.push({ order: source.index, start: spans[0].start,
-                text: `[Original message ${source.index}; ${source.name || 'Narrator'}; ${role}; ${complete ? 'complete source' : 'selected excerpts'}]\n${text}`,
-                sourceSpans: spans.map(range => ({ sourceId: id, ...range, offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) })) });
-        }
-        // Lprime is navigation for retrieval. Prompt evidence comes from the
-        // selected originals and explicitly labelled manual/legacy memories.
-        for (const doc of summaries.values()) blocks.push({ order: doc.order, start: 0,
-            text: `[${doc.manual ? 'User-edited memory' : 'Saved summary; original unavailable'}]\n${doc.text}`, sourceSpans: [] });
-        blocks.sort((a, b) => a.order - b.order || a.start - b.start);
         return { text: blocks.length ? prefix + blocks.map(block => block.text).join('\n\n') : '', blocks };
     }
-    let result = render([]), tokens = 0;
-    const selected = [], ids = new Set();
+    function rawBlock(source, span) {
+        const role = source.sourceKind === 'worldbook' ? 'imported worldbook' : source.isUser ? 'player post' : 'narrator post';
+        return `[Original message ${source.index}; ${source.name || 'Narrator'}; ${role}]\n`
+            + (span.start ? '[…]\n' : '') + source.text.slice(span.start, span.end)
+            + (span.end < source.text.length ? '\n[…]' : '');
+    }
+    // A legacy paragraph cannot be subtracted by source offsets. If recent raw
+    // chat covers part of it, render its remaining originals instead of repeating
+    // the whole paragraph alongside that same raw tail.
+    let expanded = new Set(cells.filter(cell => cell.kind === 'legacy' && cell.expandable
+        && cell.sourceSpans.some(span => excluded.has(span.sourceId))).map(cell => cell.id));
+    let result = render(expanded), tokens = result.text ? await countTokens(format(result.text)) : 0;
+    const baselineTokens = tokens, selected = [], ids = new Set();
     for (const candidate of ranked) {
         if (!target || tokens >= target) break;
         if (ids.has(candidate.id)) continue;
         ids.add(candidate.id);
-        const trial = render([...selected, candidate]);
-        if (!trial.text || trial.text === result.text) continue;
-        selected.push(candidate); result = trial;
-        tokens = await countTokens(format(result.text));
+        const added = new Set();
+        if (candidate.kind === 'raw') for (const span of candidate.sourceSpans || []) {
+            const source = sourceMap.get(span.sourceId);
+            if (!source || source.hidden || excluded.has(source.id) || span.sourceRevision !== hash(source.text)
+                || span.offsetUnit !== 'utf16' || span.endExclusive !== true || !Number.isInteger(span.start)
+                || !Number.isInteger(span.end) || span.start < 0 || span.end > source.text.length || span.end <= span.start) continue;
+            for (const match of bySource.get(span.sourceId) || []) if (match.cell.expandable
+                && span.start < match.span.end && span.end > match.span.start && !expanded.has(match.cell.id)) added.add(match.cell.id);
+        }
+        if (!added.size) continue; // Manual/legacy text is already represented once in the baseline.
+        expanded = new Set([...expanded, ...added]);
+        result = render(expanded); tokens = await countTokens(format(result.text)); selected.push(candidate);
     }
-    return { ...result, selected, tokens, targetTokens: target, overflowTokens: Math.max(0, tokens - target),
-        warning: tokens > target ? `Recovered history uses ${tokens} tokens (soft target ${target}). Complete source sentences were kept.` : '',
-        reason: result.text ? null : 'No matching archived sources selected. The archive is unchanged.' };
+    const missing = cells.filter(cell => cell.kind === 'legacy').length, stale = cells.filter(cell => cell.kind === 'stale').length;
+    const overflowTokens = Math.max(0, tokens - target);
+    const warnings = [missing ? `${missing} saved section(s) lack a current compact skeleton; saved accounts or their complete originals were kept. Backfill is explicit.` : '',
+        stale ? `${stale} changed-source section(s) are marked unavailable, not reused as current history.` : '',
+        overflowTokens ? `Story skeleton and details use ${tokens} estimated tokens (soft target ${target}); the chronological baseline was not truncated.` : ''];
+    return { ...result, selected, tokens, baselineTokens, targetTokens: target, overflowTokens,
+        warning: warnings.filter(Boolean).join(' '), reason: result.text ? null : 'No saved story sections. Recent raw chat is separate.',
+        spineInfo: { cells: cells.length, expanded: expanded.size, missing, stale,
+            excluded: cells.filter(cell => cell.kind === 'excluded').length,
+            summaryOnly: cells.filter(cell => cell.kind === 'compact-summary').length,
+            complete: !missing && !stale && !cells.some(cell => cell.kind === 'excluded') } };
 }
