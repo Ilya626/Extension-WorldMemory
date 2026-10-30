@@ -175,6 +175,8 @@ export function archiveSnapshot(archive, context = {}, { effective = true } = {}
                     && record.sourceFingerprints[id] !== messages.get(id)?.fingerprint
                     && record.sourceFingerprints[id] !== fingerprints[id])),
             sourceStatus: ids.length && sources.length === ids.length ? 'linked' : 'summary-only',
+            orderKnown: Boolean(sources.length || Number.isFinite(record.turnRange?.[0])
+                || (Number.isFinite(record.order) && record.order < Number.MAX_SAFE_INTEGER)),
             order: sources.length ? Math.min(...sources.map(source => source.index)) : record.order ?? record.turnRange?.[0] ?? position };
         const spineFingerprints = record.storySpine?.sourceFingerprints;
         packet.storySpine = (record.storySpine?.sourceStatus === 'summary-only' || !spineFingerprints

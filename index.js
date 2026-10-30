@@ -12,7 +12,7 @@ import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.
 
 const defaults = { enabled: true, auto: true, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
-    history: true, hints: true, historySemantic: true, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
+    history: true, hints: true, historySemantic: true, historySpineRerank: false, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
     historyMaxTokens: 8000, promptTargetTokens: 24000, retainedContextTokens: 8000, batchContextTokens: 24000, blindZoneExchanges: 1,
     ghostUserMessages: true, ghostAssistantMessages: true, reapplyGhostingOnSummary: false, pauseSummarization: false,
     connectionSource: 'default', connectionProfileId: '', summarizerStreaming: false, summarizerResponseLength: 0,
@@ -729,6 +729,7 @@ async function render() {
     for (const group of document.querySelectorAll('[data-connection]')) group.hidden = group.dataset.connection !== s.connectionSource;
     document.getElementById('wm_embedding_mode').value = s.historyEmbeddingMode === 'local' ? 'local' : 'api';
     document.getElementById('wm_embedding_mode').disabled = !(s.historySemantic || s.wiSemantic);
+    document.getElementById('wm_spine_rerank').disabled = !s.historySemantic;
     document.getElementById('wm_summarizer_wi_percent').disabled = !s.summarizerWorldInfo;
     const api = s.historyEmbeddingAPI || {}, local = s.historyEmbeddingLocal || {};
     for (const [id, key, fallback] of [['wm_embedding_url', 'url', ''], ['wm_embedding_key', 'key', ''],

@@ -2,13 +2,13 @@
 import { hash } from './history.js';
 
 export const STORY_SPINE_INSTRUCTION = `After the complete L0 prose append exactly one <story_spine> JSON block:
-{"nodes":[{"text":"a short chronological step with its necessary condition or unresolved result","src":["s1"]}]}
-Cover EVERY supplied handle exactly once in order. A node may group 1–4 consecutive handles from the SAME message (the supplied message marker identifies it), for example src:["s1","s2"]. Never group different messages. Handles are technical text parts, not separate events; combine adjoining parts when they form one meaningful chronological step. Write a short sentence or phrase with no minimum word count; retain the condition or unresolved result needed to understand the step. Avoid repeating an unchanged state for each technical part. Preserve who spoke, planned, knew or claimed something, and distinguish proposals and prerequisites from completed results. Out-of-character directions and unplayed scenario material remain such; do not turn them into played events. If a part merely continues the scene without a material change, say so briefly rather than inventing a change. Do not return IDs, positions, offsets, versions or new facts. Keep the complete L0 prose before this block; no prose after it.`;
+{"text":"a short chronological outline of this entire new L0 packet"}
+Write one compact outline of the packet as a whole, usually 1–3 sentences (roughly 30–60 words when useful, not a minimum or quota). Keep the main change from the beginning through the ending state, including any prerequisite, withdrawal or unresolved result needed to continue correctly. This is a reader's outline, not a list of source parts or a second detailed summary. Preserve who spoke, planned, knew or claimed something; distinguish proposals from completed results. Out-of-character directions and unplayed scenario material remain such. Do not copy previous_l0 events into this packet's outline. Do not return source handles, IDs, positions, offsets, versions or new facts: code assigns source membership and chronology. Keep the complete L0 prose before this block; no prose after it.`;
 
-/** Freeze bounded source addresses at annotation time, independently of later tokenizer changes. */
+/** Freeze code-owned source membership; bounded cells remain readable for legacy outlines. */
 export function storySpineSources(sources, options = {}) {
-    const { summaryOnly = false, maxCharacters = 1600 } = typeof options === 'number' ? { maxCharacters: options } : options;
-    const output = [], limit = Math.max(256, Math.floor(Number(maxCharacters) || 1600));
+    const { summaryOnly = false, maxCharacters = 1600, wholeSources = false } = typeof options === 'number' ? { maxCharacters: options } : options;
+    const output = [], limit = wholeSources ? Infinity : Math.max(256, Math.floor(Number(maxCharacters) || 1600));
     for (const [sourceIndex, source] of (sources || []).entries()) {
         if (typeof source.text !== 'string' || !source.text.trim()) continue;
         const ends = [...source.text.matchAll(/[.!?…]+[»”"'’)\]]*(?:\s+|$)|\n+/gu)].map(m => m.index + m[0].length);
@@ -40,11 +40,33 @@ export function readStorySpine(value, sources, { backfill = false, savedText = '
     const text = backfill ? null : (start < 0 ? response : response.slice(0, start)).trim();
     const result = { text, storySpine: null, warning: '' };
     const match = start < 0 ? null : /^<story_spine>\s*([\s\S]*?)\s*<\/story_spine>\s*$/.exec(response.slice(start));
-    let data;
+    let data, formatRepair = null;
     try {
         if (start >= 0 && !match) throw new Error('Incomplete story_spine tail.');
         if (start < 0 && !(backfill && response.trimStart().startsWith('{'))) throw new Error('Story skeleton was not returned.');
-        data = JSON.parse(match ? match[1] : response);
+        const json = match ? match[1] : response;
+        try { data = JSON.parse(json); }
+        catch (error) {
+            // Observed provider output closed the XML block but omitted only the
+            // final JSON string/object closer. Recover its exact text, never a
+            // partial XML tail, additional field, or ambiguous unescaped quote.
+            const openText = json.replace(/<\/text>\s*$/u, '');
+            if (!match || !/^\{\s*"text"\s*:\s*"(?:[^"\\]|\\.)+$/u.test(openText)) throw error;
+            data = JSON.parse(`${openText}"}`);
+            formatRepair = openText === json ? 'missing-json-closer' : 'xml-text-closer';
+            result.warning = 'Story outline JSON closer was missing; its exact text was recovered from the complete story_spine block.';
+        }
+        if (typeof data?.text === 'string') {
+            if (!data.text.trim() || !sources.length) throw new Error('Story outline and its source membership must be nonempty.');
+            const sourceSpans = sources.flatMap(source => source.sourceSpans || []);
+            const summarySpans = sources.flatMap(source => source.summarySpans || []);
+            const node = { id: `spine:${hash(JSON.stringify([sourceSpans, summarySpans]))}`, text: data.text.trim(),
+                sourceIds: [...new Set(sourceSpans.map(span => span.sourceId))], sourceSpans,
+                ...(summarySpans.length ? { sourceKind: 'saved-summary', summarySpans } : {}) };
+            result.storySpine = { version: 2, textRevision: hash(backfill ? savedText : text),
+                generationBasis: backfill ? 'saved-l0' : 'same-call', ...(formatRepair ? { formatRepair } : {}), nodes: [node] };
+            return result;
+        }
         if (!Array.isArray(data?.nodes) || !data.nodes.length || data.nodes.length > sources.length)
             throw new Error('Story skeleton must cover every supplied source handle.');
         const merge = parts => {
@@ -83,7 +105,7 @@ export function readStorySpine(value, sources, { backfill = false, savedText = '
 
 export function currentStorySpine(packet) {
     const spine = packet.storySpine;
-    if (packet.stale || !spine || spine.version !== 1 || spine.textRevision !== hash(packet.detail ?? packet.text ?? '')
+    if (packet.stale || !spine || ![1, 2].includes(spine.version) || spine.textRevision !== hash(packet.detail ?? packet.text ?? '')
         || !Array.isArray(spine.nodes) || !spine.nodes.length) return null;
     if (spine.nodes.every(node => node.sourceKind === 'saved-summary')) {
         const text = packet.detail ?? packet.text ?? '';
@@ -131,6 +153,19 @@ export function storySpineCells(packets) {
         const order = Number.isFinite(packet.order) ? packet.order : sources[0]?.index ?? Number.MAX_SAFE_INTEGER;
         const manual = Boolean(packet.manual || packet.kind === 'manual');
         const spine = !manual && currentStorySpine(packet);
+        // A packet outline can contain facts from every member. If one member is
+        // hidden, retain the other originals explicitly instead of leaking the outline.
+        if (!manual && sourceIds.some(id => hidden.has(id))) {
+            cells.push({ id: `visibility:${packet.id}`, packetId: packet.id, order, packetPosition, start: -1,
+                text: '[Story outline unavailable: manual source visibility excludes part of this packet. Visible originals follow; compact backfill is incomplete.]',
+                sourceSpans: [], kind: 'excluded', expandable: false });
+            for (const source of sources.filter(source => !hidden.has(source.id) && source.text?.trim())) {
+                cells.push({ id: `visible:${packet.id}:${source.id}`, packetId: packet.id, order: source.index,
+                    packetPosition, start: 0, text: `[Visible original; packet outline withheld]\n${source.name || 'Narrator'}: ${source.text}`,
+                    sourceSpans: [], kind: 'legacy', expandable: false });
+            }
+            continue;
+        }
         if (spine) {
             for (const node of spine.nodes) {
                 if (node.sourceKind === 'saved-summary') {
@@ -161,6 +196,10 @@ export function storySpineCells(packets) {
                 const source = sourceMap.get(id);
                 return { sourceId: id, start: 0, end: source.text.length, offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) };
             }).filter(span => span.end > 0) : [] });
+    }
+    for (const cell of cells) if (packets[cell.packetPosition]?.orderKnown === false) {
+        cell.text = `[Original chronology unavailable; stable saved order]\n${cell.text}`;
+        cell.orderKnown = false;
     }
     return cells.sort((a, b) => a.order - b.order || a.packetPosition - b.packetPosition || a.start - b.start || a.id.localeCompare(b.id));
 }

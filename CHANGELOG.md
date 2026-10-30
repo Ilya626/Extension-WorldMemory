@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-30 — complete story outline preview
+
+- Keep the entire available chronological L″ in the history prompt. Independently retrieved original windows follow their matching outline steps; selection never replaces those steps.
+- Generate one short packet outline alongside each new L0. Prepare missing outlines explicitly from saved L0 without rewriting it; preserve valid L0 when optional metadata fails.
+- Keep manual text and labelled legacy fallback. Mark missing, stale and unknown-order material rather than claiming complete chronology.
+- Add optional bounded outline-vector ranking, disabled by default. Reuse query vectors and cache outline vectors; add no generative call per RP turn.
+- Document the separate history/raw-tail budgets, soft overflow, installation and measured preview limits. API embeddings remain the default; phone-local model qualification is deferred.
+
 ## 0.3.3 — 2026-10-30
 
 - Keep a manually edited WI record's source links when reapplying saved WI. Actual source removal or invalidation still retracts the affected links; manual text remains untouched.

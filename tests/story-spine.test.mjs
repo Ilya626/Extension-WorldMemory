@@ -67,31 +67,33 @@ test('a raw hit adds bounded original detail after its step and retains the enti
     const p = packet('scene', [original], undefined, { maxCharacters: 256 });
     const handles = storySpineSources([original], { maxCharacters: 256 }), middle = Math.floor(handles.length / 2);
     const chosen = handles[middle].sourceSpans[0];
-    const result = await selectHistory(archiveHistoryNodes({ packets: [p] }), [hit(p, original, chosen.start + 2, chosen.start + 8)],
+    const selectedHit = hit(p, original, chosen.start + 2, chosen.start + 8);
+    const result = await selectHistory(archiveHistoryNodes({ packets: [p] }), [selectedHit],
         { targetTokens: 8000, countTokens });
     assert.equal(result.spineInfo.expanded, 1);
     assert.ok(result.text.includes(`Chronological step ${middle + 1}.`));
     assert.ok(result.text.includes(`Chronological step ${middle}.`));
     assert.ok(result.text.includes(`Chronological step ${middle + 2}.`));
     const raw = result.blocks.find(b => b.kind === 'raw');
-    assert.deepEqual(raw.sourceSpans, [chosen]);
-    assert.ok(raw.text.includes(handles[middle].text));
+    assert.deepEqual(raw.sourceSpans, selectedHit.sourceSpans);
+    assert.ok(raw.text.includes(original.text.slice(chosen.start + 2, chosen.start + 8)));
     assert.equal(result.blocks.length, handles.length + 1);
-    // Adjoining technical parts may share a step; a partial hit restores that
-    // whole merged range, while the following compact steps stay in place.
+    // Legacy grouped steps retain their outline; retrieval restores only its
+    // selected original window, independently of the outline's source granularity.
     const grouped = [handles.slice(0, 2), ...handles.slice(2).map(handle => [handle])];
     p.storySpine = readStorySpine(`${p.text}\n<story_spine>${JSON.stringify({ nodes: grouped.map((parts, i) => ({
         text: `Grouped step ${i}.`, src: parts.map(part => part.handle) })) })}</story_spine>`, handles).storySpine;
     assert.equal(currentStorySpine(p), p.storySpine);
-    const mergedSpan = { ...handles[0].sourceSpans[0], end: handles[1].sourceSpans[0].end };
+    const groupedHit = hit(p, original, handles[1].sourceSpans[0].start + 2, handles[1].sourceSpans[0].start + 8);
     const expanded = await selectHistory(archiveHistoryNodes({ packets: [p] }),
-        [hit(p, original, handles[1].sourceSpans[0].start + 2, handles[1].sourceSpans[0].start + 8)],
+        [groupedHit],
         { targetTokens: 8000, countTokens });
-    assert.deepEqual(expanded.blocks.find(b => b.kind === 'raw').sourceSpans, [mergedSpan]);
-    assert.ok(expanded.text.includes(original.text.slice(mergedSpan.start, mergedSpan.end)));
+    assert.deepEqual(expanded.blocks.find(b => b.kind === 'raw').sourceSpans, groupedHit.sourceSpans);
+    const detail = original.text.slice(groupedHit.sourceSpans[0].start, groupedHit.sourceSpans[0].end);
+    assert.ok(expanded.text.includes(detail));
     assert.ok(expanded.text.includes('Grouped step 1.'));
     assert.ok(expanded.text.includes('Grouped step 0.'));
-    assert.ok(expanded.text.indexOf('Grouped step 0.') < expanded.text.indexOf(original.text.slice(mergedSpan.start, mergedSpan.end)));
+    assert.ok(expanded.text.indexOf('Grouped step 0.') < expanded.text.indexOf(detail));
     const differentMessages = storySpineSources([source('x', 1, 'A condition.'), source('y', 2, 'A later answer.')]);
     const invalid = readStorySpine(`${p.text}\n<story_spine>{"nodes":[{"text":"Mixed messages","src":["s1","s2"]}]}</story_spine>`, differentMessages);
     assert.equal(invalid.storySpine, null);
@@ -104,8 +106,8 @@ test('legacy and manual accounts remain whole; summary-only skeleton never becom
     const manual = { id: 'manual', manual: true, sources: [], sourceMessageIds: [], order: 2,
         text: 'The author corrected the pending condition.' };
     const saved = { id: 'summary', text: 'Earliest surviving summary of the opening.', order: 4, sources: [], sourceMessageIds: [], sourceStatus: 'summary-only' };
-    const handles = storySpineSources([{ id: saved.id, text: saved.text }], { summaryOnly: true });
-    saved.storySpine = readStorySpine(`<story_spine>${JSON.stringify({ nodes: [{ text: 'The opening survives as a saved account.', src: ['s1'] }] })}</story_spine>`,
+    const handles = storySpineSources([{ id: saved.id, text: saved.text }], { summaryOnly: true, wholeSources: true });
+    saved.storySpine = readStorySpine(`<story_spine>${JSON.stringify({ text: 'The opening survives as a saved account.' })}</story_spine>`,
         handles, { backfill: true, savedText: saved.text }).storySpine;
     const result = await selectHistory(archiveHistoryNodes({ packets: [legacy, manual, saved] }), [], { targetTokens: 8000, countTokens });
     assert.ok(result.text.includes(legacy.text)); assert.ok(result.text.includes(manual.text));

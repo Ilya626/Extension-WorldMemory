@@ -2,6 +2,8 @@ import { HINT_PROMPT, hash, splitHint, terms } from './history.js';
 import { createEmbeddingVectorClient } from './embedding-vector-client.js';
 import { createHistoryVectorRetrieval, HISTORY_VECTOR_CONTENT_REVISION } from './history-vector-retrieval.js';
 import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history-selection.js';
+import { storySpineCells } from './story-spine.js';
+import { rerankStoryCandidates } from './history-spine-rerank.js';
 import { installHistoryInjection } from './history-injection.js';
 import { semanticWIQuery } from './semantic-wi-runtime.js';
 
@@ -26,7 +28,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     const key = view => JSON.stringify([view.chatId, view.packets.map(p => [p.id, p.textRevision, p.sourceFingerprints, p.stale,
         p.order, p.sources.map(source => [source.id, source.index, source.hidden, source.is_system, source.hint]),
         hash(JSON.stringify(p.memoryMetadata)), hash(JSON.stringify(p.storySpine)), p.manual]), view.chat.slice(-2).map(m => [m.is_user, m.is_system, m.mes]),
-        settings().historyMaxTokens, settings().historySemantic, profileId(), tokenizerKey()]);
+        settings().historyMaxTokens, settings().historySemantic, settings().historySpineRerank, profileId(), tokenizerKey()]);
     const getText = () => { if (!settings().enabled || !prepared) return ''; const current = snapshot();
         return current && prepared.key === key(current) ? prepared.text || '' : ''; };
     const injection = installHistoryInjection({ ctx, settings, getText, onPromptSize: info => {
@@ -77,7 +79,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         // growing archive for every token-count or embedding progress callback.
         const isCurrent = () => run === serial && ctx().chatMetadata === metadata && ctx().chat === view.chat;
         const output = document.getElementById('wm_history_status');
-        let timeout, warning = '', lemmas = {}, baseline;
+        let timeout, warning = '', lemmas = {}, baseline, queryVectors = [];
         const activity = () => { clearTimeout(timeout); timeout = setTimeout(() => abort.abort(), 120000); };
         try {
             const template = settings().injectionTemplate || '{{summary}}';
@@ -93,11 +95,27 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
                 catch { warning = 'Russian word forms unavailable; original words remain searchable.'; }
             }
             const args = { nodes, query, lemmas, signal: abort.signal, onActivity: activity, isCurrent,
+                onQueryVectors: vectors => { queryVectors = vectors; },
                 onProgress: progress => { if (isCurrent() && output) output.textContent = `Preparing search: ${progress.completed} / ${progress.total}. Unchanged vectors are reused.`; } };
             let ranked;
             try { ranked = await search.search({ ...args, semantic: Boolean(settings().historySemantic) }); }
             catch (error) { if (abort.signal.aborted) throw error; warning = `${error.message} Keyword search is active.`;
                 ranked = await search.search({ ...args, semantic: false }); }
+            if (settings().historySpineRerank && queryVectors.length && ranked.length) {
+                try {
+                    const cells = storySpineCells(storyNodes).filter(cell => cell.kind === 'compact' && cell.sourceSpans.length);
+                    if (cells.length) {
+                        const vectors = await embeddings.embed(cells.map(cell => cell.text), { role: 'document',
+                            signal: abort.signal, isCurrent, onActivity: activity });
+                        if (!isCurrent()) return;
+                        ranked = rerankStoryCandidates(ranked, cells, queryVectors, vectors).ranked;
+                    }
+                } catch (error) {
+                    if (!isCurrent()) return;
+                    if (abort.signal.aborted) throw error;
+                    warning = [warning, 'Story-outline ranking unavailable; original search results kept.'].filter(Boolean).join(' ');
+                }
+            }
             const diagnostics = ranked.diagnostics;
             const assembled = await selectHistory(nodes, ranked, selectionOptions);
             if (!isCurrent() || key(snapshot()) !== snapshotKey) return;

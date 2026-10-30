@@ -107,6 +107,10 @@
           <small class="wm-muted">Start the supplied local model launcher. The URL must be reachable from this browser, including on a phone. API and local vectors use separate caches.</small>
         </div>
         <small class="wm-muted">Changed records are indexed when needed; unchanged vectors are reused.</small>
+        <details class="wm-advanced"><summary>Experimental outline ranking</summary>
+          <label class="checkbox_label"><input id="wm_spine_rerank" data-setting="historySpineRerank" type="checkbox"><span>Use story outlines to refine nearby search results</span></label>
+          <small class="wm-muted">Off by default. Requires semantic search; reuses its query vector and caches outline embeddings. Candidates move at most three places. The complete outline stays in the prompt either way. Trials showed a small mixed effect, not a general quality improvement.</small>
+        </details>
         <details class="wm-advanced"><summary>Embedding cache</summary>
           <button id="wm_clear_embeddings" class="menu_button" type="button">Clear embedding cache</button>
           <small class="wm-muted">Clears reusable vectors only. Messages, saved memory and WI stay intact; future searches rebuild the vectors.</small>

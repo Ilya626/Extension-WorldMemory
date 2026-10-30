@@ -6,9 +6,9 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.3.3 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.4.0 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
-**Local L″ candidate.** The protocol passed a short synthetic Sol 6.1 pilot; large archives and effects on actual gameplay remain untested. Older archives need explicit skeleton preparation; until then, complete labelled L0 accounts remain in the prompt and can greatly exceed the target. Authored text is preserved.
+**Complete chronological outline (L″).** The entire available outline remains in each history-enabled prompt; independently retrieved originals follow their matching steps. New L0 packets include a short outline in the same model response. Older archives need explicit preparation; until then, complete labelled L0 accounts remain and can greatly exceed the target. Manual text is preserved. Large-archive preparation and 120 paired retrieval comparisons have been run; this remains a preview, with model errors and soft overflow possible. [Measured scope and limits](docs/VALIDATION_0_4.md).
 
 ## What the model receives
 
@@ -150,10 +150,13 @@ The default source packet is 24,000 tokens. The raw tail and **BlindZone (recent
 
 - **Edit L0:** expand a packet and use **Save text**. **Regenerate** rewrites it from linked sources; **Refine** also supplies your existing text. **Advanced summary prompts** exposes saved/custom L0 system instructions and the user template; it controls L0 prose only, not the separate search-note/WI instructions.
 - **If search-note/WI preparation fails:** L0 stays saved. Use **Rebuild search notes / WI** for one packet or **Prepare missing search notes / WI** for unfinished packets. These repeat the second request without rewriting L0. **Apply saved WI** reapplies saved results locally, without a model request.
+- **Prepare an older archive's outline:** use **Prepare missing story skeleton** in **L0 archive**. This makes one summarizer request per missing packet using its saved L0; it preserves that L0 and its originals. An invalid outline never discards a valid L0. Editing L0 invalidates its derived outline; prepare it again explicitly.
 - **Protect a WI edit:** use **Keep manual**; **Allow automatic updates** opts the entry back in. Author lorebooks and bindings stay intact. Generated entries follow ST's keyword, Constant, group and budget rules; semantic WI adds candidates to that same scan.
 - **If sources change:** affected L0 is marked **SOURCES CHANGED** and stale retrieval evidence is excluded. Regenerate that packet to refresh it. Manual WI edits and visibility choices are preserved.
 
 [Detailed controls, placement, search and backups](docs/REFERENCE.md) · [Optional local EmbeddingGemma 2 Q8: Windows and Termux preview](docs/LOCAL_EMBEDDINGS.md)
+
+**Experimental outline ranking** is off by default under **Search and embeddings**. It reuses the player-query embedding and caches outline vectors, then makes small changes to the existing candidate order. It never restricts search to one scene or removes outline steps. In the paired retrieval trial, four support observations improved and one worsened: net +3, not a guarantee of better RP replies. No extra generative call is added per turn.
 
 ## Update or migrate
 

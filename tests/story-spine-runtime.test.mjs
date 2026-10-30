@@ -20,7 +20,7 @@ function fixture(firstResponse) {
             calls.push({ system, prompt });
             if (calls.length === 1) return { text: firstResponse(prompt), tokenCount: 120, tokenCountSource: 'usage.completion_tokens' };
             if (system.includes('BACKFILL OUTPUT OVERRIDE')) return { text: `<story_spine>${JSON.stringify({
-                nodes: JSON.parse(prompt).sources.map(s => ({ text: 'The bridge remains conditional on council permission.', src: [s.handle] }))
+                text: 'The bridge remains conditional on council permission.'
             })}</story_spine>` };
             throw new Error('Optional search metadata service is unavailable.');
         } });
@@ -28,9 +28,7 @@ function fixture(firstResponse) {
 }
 const prose = 'The player asks about opening the bridge. The guard requires a council reply; permission is still pending.';
 function validReply(prompt) {
-    const handles = [...prompt.matchAll(/\[(s\d+)\]/gu)].map(m => m[1]);
-    return `${prose}\n<story_spine>${JSON.stringify({ nodes: handles.map(handle => ({
-        text: 'The bridge opening remains conditional on the council response.', src: [handle] })) })}</story_spine>`;
+    return `${prose}\n<story_spine>${JSON.stringify({ text: 'The bridge opening remains conditional on the council response.' })}</story_spine>`;
 }
 
 test('a malformed same-call skeleton and unavailable annotation keep the saved L0 durable', async () => {
@@ -53,6 +51,10 @@ test('a malformed same-call skeleton and unavailable annotation keep the saved L
     assert.ok(f.runtime.snapshot().packets[0].storySpine);
     assert.equal(readPacket(f.archive, packet.id).annotationStatus, 'pending');
     assert.equal(f.calls.length, 3);
+    assert.deepEqual(JSON.parse(f.calls[2].prompt), { task: 'Build the missing story skeleton only.',
+        saved_summary: prose, source_status: 'linked' });
+    assert.equal(readPacket(f.archive, packet.id).storySpine.version, 2);
+    assert.equal(readPacket(f.archive, packet.id).storySpine.generationBasis, 'saved-l0');
     assert.deepEqual(await f.runtime.backfillStorySpine(), { saved: 0, summaryOnly: 0, total: 0 });
     assert.equal(f.calls.length, 3);
 });

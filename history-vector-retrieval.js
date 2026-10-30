@@ -134,7 +134,7 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
         return result;
     }
 
-    async function search({ nodes, query, lemmas = {}, signal, onActivity, onProgress, isCurrent, semantic = true } = {}) {
+    async function search({ nodes, query, lemmas = {}, signal, onActivity, onProgress, onQueryVectors, isCurrent, semantic = true } = {}) {
         if (!Array.isArray(nodes) || typeof query !== 'string') throw new TypeError('History search requires nodes and query text.');
         if (!nodes.length || !query.trim()) return [];
         const started = performance.now(), profileId = semantic ? embeddings.profile?.().id : undefined;
@@ -231,6 +231,7 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
             onProgress: progress => { check(); onProgress?.({ ...progress, phase: 'searching', stage: 'query' }); check(); } }) : [];
         check();
         if (semantic && queries.length !== parts.length) throw new Error('History query vector count does not match query parts.');
+        onQueryVectors?.(queries);
         const rankings = parts.map((part, partIndex) => {
             const vector = queries[partIndex], norm = semantic ? Math.hypot(...vector) : 0, words = bag(part);
             const relevance = facts.map(fact => semantic ? Math.max(0, cosine(fact.vector, fact.norm, vector, norm))

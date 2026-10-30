@@ -182,7 +182,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         }
     }
     async function generateL0(owner, sources, previous, { existing = null } = {}) {
-        const localSources = storySpineSources(sources), s = config();
+        const localSources = storySpineSources(sources, { wholeSources: true }), s = config();
         guard(owner); checkPrevious(previous);
         const system = [s.summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
             'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
@@ -211,6 +211,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const marker = parsedSpine.text.indexOf('<memory_metadata>');
         const text = (marker < 0 ? parsedSpine.text : parsedSpine.text.slice(0, marker)).trim();
         requireModelOutput(text);
+        if (parsedSpine.storySpine && parsedSpine.warning) warn(parsedSpine.warning);
         const detail = { ...response, text, annotationStatus: 'pending', annotationError: null,
             storySpine: parsedSpine.storySpine ? { ...parsedSpine.storySpine, textRevision: memoryTextRevision(text),
                 sourceFingerprints: fingerprints(owner, sources), sourceStatus: 'linked' } : null,
@@ -384,23 +385,23 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 const linked = packet.sourceStatus === 'linked';
                 const sources = linked ? originals(owner, record.sourceMessageIds) : [];
                 const cells = storySpineSources(linked ? sources : [{ id: record.id,
-                    name: 'Earliest saved summary; original messages unavailable', text: record.text }], { summaryOnly: !linked });
+                    name: 'Earliest saved summary; original messages unavailable', text: record.text }], { summaryOnly: !linked, wholeSources: true });
                 options.onProgress?.({ ...result, packetId: packet.id, sourceStatus: linked ? 'linked' : 'summary-only' });
                 const system = [STORY_SPINE_INSTRUCTION, MEMORY_ROLES, languageInstruction(),
-                    'BACKFILL OUTPUT OVERRIDE: return ONLY the <story_spine> block. Do not output or rewrite L0 prose. The saved L0 is immutable. Cover every supplied handle once, in order. If these are saved-summary parts, preserve their uncertainty and do not invent original chat evidence.'].join('\n\n');
+                    'BACKFILL OUTPUT OVERRIDE: return ONLY the <story_spine>{"text":"short packet outline"}</story_spine> block. Read only the saved L0 below; do not output or rewrite it. Its source membership is assigned by code, not inferred by you. Preserve its uncertainty and do not invent original chat evidence.'].join('\n\n');
                 const response = await transport(owner, system, JSON.stringify({ task: 'Build the missing story skeleton only.',
-                    saved_summary: record.text, source_status: linked ? 'linked' : 'summary-only',
-                    sources: cells.map(cell => ({ handle: cell.handle, message: cell.message, name: cell.name, text: cell.text })) }), options);
+                    saved_summary: record.text, source_status: linked ? 'linked' : 'summary-only' }), options);
                 guard(owner); if (linked) checkSources(owner, sources);
                 if (JSON.stringify(readPacket(owner.archive, packet.id)) !== before) throw new Error('Saved L0 changed during skeleton preparation. Response not applied.');
                 const parsed = readStorySpine(response.text, cells, { backfill: true, savedText: record.text });
                 if (!parsed.storySpine) throw new Error(parsed.warning || 'No usable story skeleton. Saved L0 is unchanged.');
                 putPacket(owner.archive, { ...record, storySpine: { ...parsed.storySpine,
                     sourceFingerprints: linked ? fingerprints(owner, sources) : {}, sourceStatus: linked ? 'linked' : 'summary-only' },
-                    storySpineError: null, storySpineUsage: response.usage ?? response.usageMetadata ?? null,
+                    storySpineError: parsed.warning || null, storySpineUsage: response.usage ?? response.usageMetadata ?? null,
                     storySpineResponseTokenCount: response.tokenCount ?? null,
                     storySpineResponseTokenCountSource: response.tokenCountSource ?? null });
                 await persist(owner, 'story-spine', record.id);
+                if (parsed.warning) warn(parsed.warning);
                 result.saved++; if (!linked) result.summaryOnly++;
             }
             status(`Story skeleton saved for ${result.saved} / ${result.total} L0 packets. L0 text and search notes were kept.`);

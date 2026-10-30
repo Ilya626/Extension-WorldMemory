@@ -6,7 +6,7 @@
 
 Each new packet follows two requests through the summarizer connection:
 
-1. **Stage 1:** generate L0 prose from this packet's original messages and the **complete immediately preceding L0** (`previous full L0`), then save the new L0 durably. The predecessor supports continuity; it is not a short L′ substitute. The growing archive retains the individual saved packets rather than merging them into higher layers.
+1. **Stage 1:** generate L0 prose and its short chronological **L″ outline** from this packet's original messages and the **complete immediately preceding L0** (`previous full L0`), then save the new L0 durably. The predecessor supports continuity; its events must not be copied into the new packet. Code assigns outline source links and order. A malformed optional outline leaves the valid L0 saved. The growing archive retains individual packets rather than merging them into higher layers.
 2. **Stage 2:** annotate the saved L0 using the same original sources. Save a short **L′** navigation thread, exact source excerpts (`facts`) and optional WI updates. Code assigns source addresses and text spans. New WI evidence and excerpts must come from the packet's originals, not merely from the summary or prior references.
 
 Active native WI can be supplied read-only to both stages under **Summarizer connection → Advanced summarizer context**. The managed UID/reference catalogue also includes inactive entries, so a record need not be activated in the current prompt to be found and updated as an existing subject. Existing references help identify subjects; they do not prove new events.
@@ -28,6 +28,7 @@ Expand a packet in **L0 archive**:
 | **Save text** | Save your edited L0 without a model request. Keep source links; invalidate old search/WI annotation and mark it pending. |
 | **Regenerate** | Generate a replacement from that packet's linked sources and its chronological predecessor, then run stage 2. |
 | **Refine** | Supply the existing L0 as well as those sources and predecessor to produce a complete revised L0, then run stage 2. |
+| **Prepare / Rebuild story skeleton** | Generate this packet's short L″ from saved L0, preserving L0 prose and original source links. Manual or stale records are not silently rewritten. |
 | **Rebuild search notes / WI** | Explicitly rerun stage 2 for this packet, including one whose annotation was already completed; preserve its L0 prose. |
 | **Delete** | Remove the saved packet from active use and retract its automatic contributions. Original chat messages remain. |
 
@@ -35,15 +36,17 @@ Expand a packet in **L0 archive**:
 
 Your edited L0 remains a separately labelled search candidate. Saved summaries without original messages are searchable too. Selection follows relevance and the history token budget.
 
+**Prepare missing story skeleton** prepares absent outlines across eligible archive packets, one summarizer request per packet. Existing valid outlines are reused. Backfill sees the saved L0, so it cannot recover a detail already omitted from that account. Editing L0 invalidates its derived outline; changes to originals mark it stale. Missing outlines retain labelled full L0; unknown original order is explicitly marked.
+
 Search notes use brief scene labels and source-specific keywords with exact excerpts. They guide retrieval of the originals; source coverage and a ready status do not guarantee that every detail will be selected for a reply. Updated instructions apply when notes are next generated; existing notes remain saved.
 
 Editing, swiping or deleting linked chat messages invalidates affected retrieval evidence. The saved account is retained but excluded from retrieval while stale. Use **Regenerate** for the affected packet and review any missing originals; it uses that packet's remaining linked source set, not arbitrary neighbouring messages.
 
 ## History and prompt size
 
-Before the next reply, the latest player post searches earlier sources. L′ and search keys help locate them; selected original excerpts are inserted in chronological order. User-edited and source-less memories carry explicit labels. L′ remains a search aid in the archive. Restoring an excerpt does not mean the whole episode was recovered.
+Before the next reply, the latest player post independently searches earlier sources. L′ and search keys help locate them. The entire available L″ stays in the prompt, with selected exact original windows added immediately after their matching outline step. Overlapping windows merge; compact steps are never replaced by hits. User-edited and source-less memories carry explicit labels. L′ remains a search aid in the archive. Restoring an excerpt does not mean the whole episode was recovered.
 
-**Max history tokens (soft target)** applies to retrieved history only. Whole retained fragments can exceed it with a warning; it is not a truncation limit on saved L0. **Raw tail** independently retains recent messages. **Advanced history insertion** controls history position, role, depth, wrapper and whether native WI may scan it. WI has its own insertion controls.
+**Max history tokens (soft target)** shares its default 8,000 tokens between the full outline, its labels and retrieved originals. Whole retained fragments or the outline itself can exceed it with a warning; it is not a truncation limit on saved L0. **Raw tail** independently retains recent messages. **Advanced history insertion** controls history position, role, depth, wrapper and whether native WI may scan it. Setting history insertion to Off disables this history prompt, including the outline. WI has its own insertion controls.
 
 **Full RP prompt target (tokens)** defaults to 24,000 for the complete input: system/card, WI, history, raw tail and current post. It is a size reference, not a hard cap enforced on ST's complete request. Check the prompt-size display and actual assembled prompt.
 
@@ -58,6 +61,8 @@ Open **Search and embeddings**. **Search history by meaning (embeddings)** enabl
 New installations enable semantic history search with **API embeddings**, Google **`gemini-embedding-001`**, **768 dimensions**, **Google / Gemini embeddings** format. Existing saved settings are preserved. Set **API URL** and **API key** here; blank values inherit WorldMemory's OpenAI-compatible summarizer URL/key. For a current ST connection, Connection Profile or Ollama summarizer, enter embedding credentials explicitly. **API format** also offers OpenAI-compatible embeddings when supported by the provider. Google-native requests use `x-goog-api-key`. ST Vector Storage settings are not used.
 
 Changed sources are indexed as needed; unchanged vectors and queries are reused. IndexedDB is a derivative cache, with RAM fallback. API and local profiles keep separate caches. Embedding failures leave keyword search available. No separate generative search request or mandatory reranker is needed for every player post.
+
+**Experimental outline ranking** is disabled by default. When enabled, cached outline vectors refine the existing candidate order in groups of four, moving a candidate at most three positions. Query vectors are reused. Source addresses bind each score to its actual window; time order is not inferred from vector coordinates. The method neither gates search to one scene nor adds a recency bonus. Failure retains the ordinary ranking; cancellation retains the already published baseline. [Preview validation](VALIDATION_0_4.md).
 
 With **Google / Gemini embeddings**, Gemini Embedding 2 model names automatically use the model's textual search instructions. Use the exact model ID supported by your provider; changing models creates a separate vector space and index. The default remains `gemini-embedding-001`. See [Google's embedding instructions](https://ai.google.dev/gemini-api/docs/embeddings).
 
