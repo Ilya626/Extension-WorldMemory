@@ -1,3 +1,7 @@
 review/
 node_modules/
 *.log
+/AGENTS.md
+/TASKS.md
+# Retired research adapter; the addon uses embedding-vector-client.js.
+/history-embedding-provider.js

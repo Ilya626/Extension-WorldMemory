@@ -1,50 +1,155 @@
-<div class="world-memory-settings">
+﻿<div class="world-memory-settings">
   <div class="inline-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header"><b>World Memory · 0.2.2</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+    <div class="inline-drawer-toggle inline-drawer-header"><b>WorldMemory</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
     <div class="inline-drawer-content">
-      <p class="wm-muted">Character profiles and reference WI from Summaryception's saved story. Your original lorebooks stay intact.</p>
-      <label class="checkbox_label"><input id="wm_enabled" type="checkbox"><span>Enable World Memory</span></label>
-      <label class="checkbox_label"><input id="wm_auto" type="checkbox"><span>Update WI after a Summaryception packet is saved</span></label>
-      <label class="checkbox_label"><input id="wm_main_constant" type="checkbox"><span>Always include main character profiles</span></label>
-      <small class="wm-muted">Main profiles use ST's Constant strategy. Other entries use normal keyword activation and the native WI budget.</small>
-      <label for="wm_main_names">Main characters to always track (one name per line)</label>
-      <textarea id="wm_main_names" class="text_pole" rows="3" placeholder="Mira&#10;Anton"></textarea>
-      <small class="wm-muted">Principal characters in played scenes are also picked up automatically. This list adds explicit names; it does not reveal character-card secrets.</small>
-      <details><summary>History with selective detail · experimental</summary>
-        <label class="checkbox_label"><input id="wm_history" type="checkbox"><span>Build and use addressable L0 / L0′ history</span></label>
-        <p class="wm-muted">Update memory creates detailed episodes and short scene anchors alongside WI. Before a reply, relevant original exchanges replace or expand anchors at their chronological positions. The live chat stays intact. Requires Summaryception 5.5.4-local.21 or later.</p>
-        <label class="checkbox_label"><input id="wm_hints" type="checkbox"><span>Ask the RP model for a hidden scene / keys / carry block</span></label>
-        <small class="wm-muted">Three short fields after the post, attached to that reply and swipe. Missing markup never rejects the RP answer. Adds output tokens without a second request.</small>
-        <label for="wm_history_base">Compact timeline budget (tokens)</label><input id="wm_history_base" class="text_pole" type="number" min="1" step="500">
-        <label for="wm_history_zoom">Additional detail budget (tokens)</label><input id="wm_history_zoom" class="text_pole" type="number" min="0" step="500">
-        <label class="checkbox_label"><input id="wm_semantic" type="checkbox"><span>Also search using ST's configured hosted embeddings</span></label>
-        <small class="wm-muted">Off: local keyword search, including Russian lemmas when Russian WI Forms is ready. On: uses the hosted provider/model and key already configured in ST Vector Storage; may incur charges. No local model downloads. WI keeps native activation rules.</small>
-        <div id="wm_history_status" class="wm-muted" role="status">Prepared before the next RP generation. If unavailable or over budget, ordinary Summaryception layers are used.</div>
+      <p class="wm-muted">A growing L0 archive for this chat. Relevant earlier history is retrieved before each reply; the archive is never inserted in full.</p>
+      <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
+      <div class="wm-actions wm-primary-actions"><button id="wm_summarize" class="menu_button" type="button">Summarize</button><button id="wm_stop" class="menu_button" type="button">Stop</button></div>
+      <div id="wm_status" class="wm-status" role="status" aria-live="polite">Loading…</div>
+
+      <section class="wm-section" aria-labelledby="wm_archive_heading">
+        <h4 id="wm_archive_heading">L0 archive</h4>
+        <p class="wm-muted">Each packet saves a new L0 using its original messages and the complete preceding L0. Search notes and optional WI are prepared after L0 is saved. If that step fails, the saved L0 remains available.</p>
+        <div id="wm_archive_status" class="wm-muted" role="status" aria-live="polite"></div>
+        <div id="wm_archive" class="wm-archive"></div>
+        <button id="wm_backfill_metadata" class="menu_button" type="button">Prepare missing search notes / WI</button>
+        <small class="wm-muted">Resumes the second step for saved L0 records without rewriting them. Uses the summarizer connection below. Stop cancels processing.</small>
+      </section>
+
+      <section class="wm-section" aria-labelledby="wm_history_heading">
+        <h4 id="wm_history_heading">History for the next reply</h4>
+        <div class="wm-grid">
+          <div class="wm-field"><label for="wm_raw_tail">Raw tail (tokens)</label><input id="wm_raw_tail" data-setting="retainedContextTokens" class="text_pole" type="number" min="0" step="500"></div>
+          <div class="wm-field"><label for="wm_history_max">Max history tokens (soft target)</label><input id="wm_history_max" data-setting="historyMaxTokens" class="text_pole" type="number" min="1" step="500"></div>
+        </div>
+        <small class="wm-muted">The raw tail keeps recent messages separate from retrieved earlier history. Max history tokens applies only to retrieved history: whole fragments may exceed it with a warning. Neither setting limits the archive.</small>
+        <div id="wm_history_status" class="wm-muted" role="status" aria-live="polite"></div>
+        <div id="wm_prompt_size" class="wm-muted" role="status"></div>
+        <details class="wm-advanced"><summary>Advanced history and packet settings</summary>
+          <label class="checkbox_label"><input id="wm_reply_hints" data-setting="hints" type="checkbox"><span>Let replies add hidden search hints</span></label>
+          <small class="wm-muted">Lets the chat model append a short scene cue for later history search. Uses the same reply; existing messages do not need a cue.</small>
+          <div class="wm-grid">
+            <div class="wm-field"><label for="wm_batch_tokens">Source packet (tokens)</label><input id="wm_batch_tokens" data-setting="batchContextTokens" class="text_pole" type="number" min="1" step="500"></div>
+            <div class="wm-field"><label for="wm_blind_zone">BlindZone (recent exchanges)</label><input id="wm_blind_zone" data-setting="blindZoneExchanges" class="text_pole" type="number" min="0" step="1"></div>
+          </div>
+          <small class="wm-muted">Packet size controls when older sources are ready to summarize. BlindZone protects the newest exchanges from summarization, in addition to the retained raw tail.</small>
+          <label class="checkbox_label"><input id="wm_pause" data-setting="pauseSummarization" type="checkbox"><span>Pause automatic summarization</span></label>
+          <label class="checkbox_label"><input id="wm_ghost_user" data-setting="ghostUserMessages" type="checkbox"><span>Hide summarized user messages from the model</span></label>
+          <label class="checkbox_label"><input id="wm_ghost_assistant" data-setting="ghostAssistantMessages" type="checkbox"><span>Hide summarized assistant messages from the model</span></label>
+          <label class="checkbox_label"><input id="wm_reapply_ghosting" data-setting="reapplyGhostingOnSummary" type="checkbox"><span>Reapply automatic hiding after a summary</span></label>
+          <small class="wm-muted">Original messages stay in the chat. Leave reapplying off to preserve manual visibility changes.</small>
+          <div class="wm-field"><label for="wm_prompt_target">Full RP prompt target (tokens)</label><input id="wm_prompt_target" data-setting="promptTargetTokens" class="text_pole" type="number" min="1" step="1000"></div>
+          <small class="wm-muted">A prompt-size reference including other context, WI and the raw tail; this is not an archive limit.</small>
+        </details>
+        <details class="wm-advanced"><summary>Advanced history insertion</summary>
+          <div class="wm-field"><label for="wm_injection_position">Insert retrieved history</label><select id="wm_injection_position" data-setting="injectionPosition" class="text_pole" aria-describedby="wm_injection_position_help"><option value="-1">Off — do not send history</option><option value="2">Before the system / setup prompt</option><option value="0">Immediately before chat history</option><option value="chat_end">After the last chat message</option><option value="1">Inside chat — set distance below</option></select></div>
+          <div class="wm-grid">
+            <div id="wm_injection_depth_controls" class="wm-field"><label for="wm_injection_depth">Distance from the end of chat (messages)</label><input id="wm_injection_depth" data-setting="injectionDepth" class="text_pole" type="number" min="0" step="1"></div>
+            <div class="wm-field"><label for="wm_injection_role">Message role</label><select id="wm_injection_role" data-setting="injectionRole" class="text_pole"><option value="0">System</option><option value="1">User</option><option value="2">Assistant</option></select></div>
+          </div>
+          <small id="wm_injection_position_help" class="wm-muted">Inside chat: 1 = before the latest message; 2 = before the latest two messages. Each retained user or AI message counts separately. 0 switches to After the last chat message. Other preset blocks, including Post-History Instructions, can still follow history. Text Completion Continue places depth 0 before the AI message being continued.</small>
+          <label class="checkbox_label"><input id="wm_injection_scan" data-setting="injectionScan" type="checkbox"><span>Allow native WI scanning of inserted history</span></label>
+          <div class="wm-field"><label for="wm_injection_template">History wrapper</label><textarea id="wm_injection_template" data-setting="injectionTemplate" class="text_pole" rows="3" spellcheck="false"></textarea></div>
+          <small class="wm-muted">Use {{summary}} where retrieved history should appear. WI has its own insertion controls below.</small>
+        </details>
+      </section>
+
+      <details class="wm-section" open><summary>Summarizer connection</summary>
+        <p class="wm-muted">WorldMemory owns this connection. It is used for L0 and the subsequent search-note / WI request.</p>
+        <div class="wm-field"><label for="wm_summary_response_tokens">Response token override (0 = inherit connection)</label><input id="wm_summary_response_tokens" data-setting="summarizerResponseLength" class="text_pole" type="number" min="0" step="512"></div>
+        <div class="wm-field"><label for="wm_connection_source">Connection</label><select id="wm_connection_source" data-setting="connectionSource" class="text_pole"><option value="default">Current SillyTavern connection</option><option value="profile">SillyTavern Connection Profile</option><option value="openai">OpenAI-compatible API</option><option value="ollama">Ollama</option></select></div>
+        <div id="wm_connection_profile_fields" class="wm-field" data-connection="profile"><label for="wm_connection_profile">Connection Profile</label><select id="wm_connection_profile" data-setting="connectionProfileId" class="text_pole"><option value="">Select a profile</option></select></div>
+        <div id="wm_connection_openai_fields" data-connection="openai">
+          <div class="wm-field"><label for="wm_openai_url">OpenAI-compatible API URL</label><input id="wm_openai_url" data-setting="openaiUrl" class="text_pole" type="url" placeholder="https://provider.example/v1" spellcheck="false"></div>
+          <div class="wm-field"><label for="wm_openai_key">API key</label><input id="wm_openai_key" data-setting="openaiKey" class="text_pole" type="password" autocomplete="off"></div>
+          <div class="wm-field"><label for="wm_openai_model">Model</label><input id="wm_openai_model" data-setting="openaiModel" class="text_pole" type="text" spellcheck="false"></div>
+          <details class="wm-advanced"><summary>API response default</summary><small class="wm-muted">Used when the response token override is 0.</small><div class="wm-field"><label for="wm_openai_max_tokens">API response tokens (0 = provider default)</label><input id="wm_openai_max_tokens" data-setting="openaiMaxTokens" class="text_pole" type="number" min="0" step="512"></div></details>
+        </div>
+        <div id="wm_connection_ollama_fields" data-connection="ollama">
+          <div class="wm-field"><label for="wm_ollama_url">Ollama URL</label><input id="wm_ollama_url" data-setting="ollamaUrl" class="text_pole" type="url" placeholder="http://localhost:11434" spellcheck="false"></div>
+          <div class="wm-field"><label for="wm_ollama_model">Ollama model</label><input id="wm_ollama_model" data-setting="ollamaModel" class="text_pole" type="text" spellcheck="false"></div>
+          <details class="wm-advanced"><summary>Ollama response default</summary><small class="wm-muted">Used when the response token override is 0.</small><div class="wm-field"><label for="wm_ollama_max_tokens">Ollama response tokens (0 = model default)</label><input id="wm_ollama_max_tokens" data-setting="ollamaMaxTokens" class="text_pole" type="number" min="0" step="512"></div></details>
+        </div>
+        <label class="checkbox_label"><input id="wm_stream" data-setting="summarizerStreaming" type="checkbox"><span>Stream summarizer responses</span></label>
+        <div class="wm-field"><label for="wm_summary_language">L0 language</label><select id="wm_summary_language" data-setting="summaryLanguage" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Russian</option><option value="custom">Custom language</option></select></div>
+        <div class="wm-field wm-custom-language"><label for="wm_summary_custom_language">Custom language</label><input id="wm_summary_custom_language" data-setting="summaryCustomLanguage" class="text_pole" type="text" placeholder="Language name"></div>
+        <details class="wm-advanced"><summary>Advanced summary prompts</summary>
+          <small class="wm-muted">Controls L0 prose only. Blank fields use the built-in prompts. Search notes and WI are prepared separately.</small>
+          <div class="wm-field"><label for="wm_summary_system_prompt">System instructions</label><textarea id="wm_summary_system_prompt" data-setting="summarizerSystemPrompt" class="text_pole" rows="5" placeholder="Leave blank for the built-in summary instructions"></textarea></div>
+          <div class="wm-field"><label for="wm_summary_user_prompt">User template</label><textarea id="wm_summary_user_prompt" data-setting="summarizerUserPrompt" class="text_pole" rows="5" placeholder="Leave blank for the built-in user template"></textarea></div>
+          <small class="wm-muted">Template fields: {{story_txt}} = new sources; {{context_str}} = complete previous L0; {{player_name}} = player name.</small>
+        </details>
+        <details class="wm-advanced"><summary>Advanced summarizer context</summary>
+          <label class="checkbox_label"><input id="wm_summarizer_wi" data-setting="summarizerWorldInfo" type="checkbox"><span>Provide active native WI as summarizer context</span></label>
+          <div class="wm-field"><label for="wm_summarizer_wi_percent">WI context allowance (% of source tokens)</label><input id="wm_summarizer_wi_percent" data-setting="summarizerWorldInfoPercent" class="text_pole" type="number" min="0" max="100" step="1"></div>
+          <small class="wm-muted">Reference context helps identify entities. This allowance applies to background requests. Set the reply WI budget in ST's World Info settings.</small>
+        </details>
       </details>
-      <details><summary>Request and insertion settings</summary>
-        <label for="wm_language">Entry language</label>
-        <select id="wm_language" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Русский</option></select>
-        <label for="wm_target">Target tokens per entry (writing guidance)</label><input id="wm_target" class="text_pole" type="number" min="40" step="20">
-        <label for="wm_response_tokens">Maximum response tokens (0 = follow Summaryception)</label><input id="wm_response_tokens" class="text_pole" type="number" min="0" step="512">
-        <label for="wm_detail_budget">Original-message detail tokens per packet</label><input id="wm_detail_budget" class="text_pole" type="number" min="0" step="500">
-        <small class="wm-muted">The complete saved L0 summary is always supplied. Original messages add detail, newest first, without cutting messages.</small>
-        <label for="wm_reference_budget">Prior entry-fact tokens per request</label><input id="wm_reference_budget" class="text_pole" type="number" min="500" step="500">
-        <label for="wm_position">WI insertion position</label>
-        <select id="wm_position" class="text_pole"><option value="4">In-chat @ Depth — near the latest messages</option><option value="0">Before Main Prompt / Story String</option><option value="1">After Main Prompt / Story String</option><option value="2">Before Author's Note</option><option value="3">After Author's Note</option></select>
-        <label for="wm_depth">Depth (messages from the end)</label><input id="wm_depth" class="text_pole" type="number" min="0">
-        <small class="wm-muted">Depth 2 places WI before the last assistant/user pair in an ordinary exchange. Prompt Manager and Post-History can affect the final order.</small>
+
+      <details class="wm-section"><summary>Search and embeddings</summary>
+        <label class="checkbox_label"><input id="wm_semantic" data-setting="historySemantic" type="checkbox"><span>Search history by meaning (embeddings)</span></label>
+        <p class="wm-muted">Keyword search remains available with embeddings off, including Russian forms. History retrieval and WI activation remain separate.</p>
+        <div class="wm-field"><label for="wm_embedding_mode">Embedding connection</label><select id="wm_embedding_mode" class="text_pole"><option value="api">API embeddings</option><option value="local">Local embeddings</option></select></div>
+        <div id="wm_embedding_api_fields">
+          <div class="wm-field"><label for="wm_embedding_url">API URL</label><input id="wm_embedding_url" class="text_pole" type="url" placeholder="https://provider.example/v1" spellcheck="false"></div>
+          <div class="wm-field"><label for="wm_embedding_key">API key</label><input id="wm_embedding_key" class="text_pole" type="password" autocomplete="off"></div>
+          <small class="wm-muted">Blank fields reuse the URL/key from WorldMemory's OpenAI-compatible summarizer. Other connections need an embedding URL/key here.</small>
+          <div class="wm-field"><label for="wm_embedding_transport">API format</label><select id="wm_embedding_transport" class="text_pole"><option value="google-native">Google / Gemini embeddings</option><option value="openai">OpenAI-compatible embeddings</option></select></div>
+          <div class="wm-field"><label for="wm_embedding_model">Embedding model</label><input id="wm_embedding_model" class="text_pole" type="text" placeholder="gemini-embedding-001" spellcheck="false"></div>
+          <details class="wm-advanced"><summary>Advanced embedding API settings</summary>
+            <div class="wm-field"><label for="wm_embedding_dimensions">Dimensions</label><input id="wm_embedding_dimensions" class="text_pole" type="number" min="1" step="1"></div>
+          </details>
+        </div>
+        <div id="wm_embedding_local_fields" hidden>
+          <div class="wm-field"><label for="wm_embedding_local_url">Local embedding URL</label><input id="wm_embedding_local_url" class="text_pole" type="url" placeholder="http://127.0.0.1:8081" spellcheck="false"></div>
+          <small class="wm-muted">Start the supplied local model launcher. The URL must be reachable from this browser, including on a phone. API and local vectors use separate caches.</small>
+        </div>
+        <small class="wm-muted">Changed records are indexed when needed; unchanged vectors are reused.</small>
+        <details class="wm-advanced"><summary>Embedding cache</summary>
+          <button id="wm_clear_embeddings" class="menu_button" type="button">Clear embedding cache</button>
+          <small class="wm-muted">Clears reusable vectors only. Messages, saved memory and WI stay intact; future searches rebuild the vectors.</small>
+        </details>
       </details>
-      <div class="wm-actions"><button id="wm_update" class="menu_button">Update memory now</button><button id="wm_stop" class="menu_button">Stop</button><button id="wm_open" class="menu_button">Open lorebook</button></div>
-      <div id="wm_status" class="wm-status" role="status">Loading…</div>
-      <div id="wm_integration" class="wm-muted"></div>
-      <div id="wm_book" class="wm-muted"></div>
-      <details><summary>Characters</summary><div id="wm_characters"></div></details>
-      <details><summary>Other records and sources</summary><div id="wm_records"></div></details>
-      <details><summary>Portable backup</summary>
-        <p class="wm-muted">Native lorebook JSON is editable and carries World Memory's source contributions. Import also supports World Memory's backup with its packet links.</p>
-        <div class="wm-actions"><button id="wm_export" class="menu_button">Export backup</button><button id="wm_import" class="menu_button">Import backup</button></div>
+
+      <details class="wm-section"><summary>World Info · entity reference</summary>
+        <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. Generated WI uses a separate chat-scoped lorebook and native activation rules and budget. Original lorebooks stay intact.</p>
+        <label class="checkbox_label"><input id="wm_auto" data-setting="auto" type="checkbox"><span>Prepare and apply WI after saving L0</span></label>
+        <label class="checkbox_label"><input id="wm_main_constant" data-setting="alwaysMain" type="checkbox"><span>Include main profiles without keyword triggers</span></label>
+        <small class="wm-muted">Uses ST's Constant setting. Disabled entries, groups and ST's token budget still apply. Other entries use normal keyword activation.</small>
+        <label class="checkbox_label"><input id="wm_wi_semantic" data-setting="wiSemantic" type="checkbox"><span>Also find WI by meaning</span></label>
+        <small class="wm-muted">Uses the shared embedding connection above. Keywords and Russian forms keep working; ST decides which entries fit its conditions and budget.</small>
+        <div id="wm_wi_search_status" class="wm-muted" role="status"></div>
+        <div class="wm-field"><label for="wm_main_names">Additional main characters (one name per line)</label><textarea id="wm_main_names" class="text_pole" rows="3" placeholder="Mira&#10;Anton"></textarea></div>
+        <small class="wm-muted">Principal characters in played scenes are also tracked automatically. This list adds explicit names.</small>
+        <div class="wm-actions"><button id="wm_retry_saved_wi" class="menu_button" type="button">Apply saved WI</button><button id="wm_update" class="menu_button" type="button">Update legacy WI</button><button id="wm_open" class="menu_button" type="button">Open lorebook</button></div>
+        <small class="wm-muted">Apply saved WI reuses saved results. Update legacy WI makes model requests for older records; it does not regenerate L0.</small>
+        <div id="wm_saved_wi_status" class="wm-muted" role="status"></div>
+        <div id="wm_book" class="wm-muted"></div>
+        <details class="wm-advanced"><summary>Advanced WI writing and insertion</summary>
+          <div class="wm-grid">
+            <div class="wm-field"><label for="wm_wi_topk">Maximum semantic WI candidates</label><input id="wm_wi_topk" data-setting="wiSemanticTopK" class="text_pole" type="number" min="1" max="32" step="1"></div>
+            <div class="wm-field"><label for="wm_wi_threshold">Minimum semantic similarity</label><input id="wm_wi_threshold" data-setting="wiSemanticThreshold" class="text_pole" type="number" min="0" max="1" step="0.05"></div>
+          </div>
+          <small class="wm-muted">A semantic match adds one temporary keyword and can add one point to ST group scoring. Replies search the current player post; background WI scans search their selected sources. ST still checks conditions, groups and budgets.</small>
+          <div class="wm-field"><label for="wm_language">WI entry language</label><select id="wm_language" data-setting="language" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Russian</option></select></div>
+          <div class="wm-field"><label for="wm_target">Target tokens per entry (writing guidance)</label><input id="wm_target" data-setting="targetTokens" class="text_pole" type="number" min="40" step="20"></div>
+          <div class="wm-field"><label for="wm_response_tokens">Legacy WI response tokens (0 = connection default)</label><input id="wm_response_tokens" data-setting="responseTokens" class="text_pole" type="number" min="0" step="512"></div>
+          <div class="wm-field"><label for="wm_detail_budget">Original-message detail tokens per legacy packet</label><input id="wm_detail_budget" data-setting="detailTokens" class="text_pole" type="number" min="0" step="500"></div>
+          <div class="wm-field"><label for="wm_reference_budget">Prior entry-fact tokens per request</label><input id="wm_reference_budget" data-setting="referenceTokens" class="text_pole" type="number" min="500" step="500"></div>
+          <div class="wm-field"><label for="wm_position">WI insertion position</label><select id="wm_position" data-setting="position" class="text_pole"><option value="4">In chat at depth</option><option value="0">Before Main Prompt / Story String</option><option value="1">After Main Prompt / Story String</option><option value="2">Before Author’s Note</option><option value="3">After Author’s Note</option></select></div>
+          <div class="wm-field"><label for="wm_depth">WI depth (messages from the end)</label><input id="wm_depth" data-setting="depth" class="text_pole" type="number" min="0" step="1"></div>
+          <small class="wm-muted">Depth applies to in-chat WI. Prompt Manager and Post-History can affect final placement.</small>
+        </details>
+        <details class="wm-advanced"><summary>Characters</summary><div id="wm_characters"></div></details>
+        <details class="wm-advanced"><summary>Other records and sources</summary><div id="wm_records"></div></details>
+      </details>
+
+      <details class="wm-section"><summary>Portable backup</summary>
+        <p class="wm-muted">Native lorebook JSON carries editable WI and its source contributions. WorldMemory backups also preserve packet links.</p>
+        <div class="wm-actions"><button id="wm_export" class="menu_button" type="button">Export backup</button><button id="wm_import" class="menu_button" type="button">Import backup</button></div>
         <input id="wm_import_file" type="file" accept=".json" hidden>
       </details>
+      <div id="wm_integration" class="wm-muted"></div>
     </div>
   </div>
 </div>

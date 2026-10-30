@@ -1,13 +1,45 @@
-.world-memory-settings .inline-drawer-content > * { margin-top: .55em; }
-.world-memory-settings details > summary { cursor: pointer; font-weight: 600; }
-.world-memory-settings details > label,.world-memory-settings details > input,.world-memory-settings details > select { display: block; width: 100%; margin: .45em 0; }
-.world-memory-settings .wm-actions { display: flex; flex-wrap: wrap; gap: .4em; }
-.world-memory-settings .wm-actions button { flex: 1 1 auto; margin: 0; }
-.world-memory-settings .wm-muted { opacity: .75; font-size: .88em; overflow-wrap: anywhere; }
-.world-memory-settings .wm-status { padding: .5em; border-left: 3px solid var(--SmartThemeQuoteColor, #888); overflow-wrap: anywhere; }
-.world-memory-settings .wm-record { padding: .6em 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); }
-.world-memory-settings .wm-record pre { white-space: pre-wrap; font: inherit; max-height: 15em; overflow: auto; }
-.world-memory-settings .wm-record header { display: flex; gap: .4em; align-items: center; flex-wrap: wrap; }
-.world-memory-settings .wm-record button { font-size: .85em; }
-.world-memory-settings details > .checkbox_label { display: flex; align-items: flex-start; gap: .4em; }
-.world-memory-settings details > .checkbox_label input { flex: 0 0 auto; }
+﻿.world-memory-settings { --wm-gap: .65rem; }
+.world-memory-settings .inline-drawer-content { padding-bottom: .8rem; }
+.world-memory-settings .inline-drawer-content > * { margin-top: var(--wm-gap); }
+.world-memory-settings .wm-section { border-top: 1px solid var(--SmartThemeBorderColor, #555); padding-top: .8rem; margin-top: 1rem; }
+.world-memory-settings h4 { font-size: 1em; margin: 0 0 .5rem; }
+.world-memory-settings p { margin: .5rem 0; }
+.world-memory-settings details > summary { cursor: pointer; font-weight: 600; padding: .35rem 0; overflow-wrap: anywhere; }
+.world-memory-settings .wm-advanced { margin-top: .75rem; }
+.world-memory-settings .wm-advanced > summary { font-size: .92em; }
+.world-memory-settings .wm-field { min-width: 0; margin: .65rem 0; }
+.world-memory-settings .wm-field > label { display: block; margin-bottom: .3rem; line-height: 1.4; }
+.world-memory-settings .wm-field > .text_pole { display: block; width: 100%; max-width: 100%; min-width: 0; margin: 0; box-sizing: border-box; }
+.world-memory-settings textarea { resize: vertical; }
+.world-memory-settings .wm-custom-language { display: none; }
+.world-memory-settings:has(#wm_summary_language option[value="custom"]:checked) .wm-custom-language { display: block; }
+.world-memory-settings .menu_button { width: auto; max-width: 100%; white-space: normal; }
+.world-memory-settings #wm_backfill_metadata { width: 100%; min-height: 2.5rem; }
+.world-memory-settings input:not([type="checkbox"]):not([type="file"]),
+.world-memory-settings select { min-height: 2.5rem; }
+.world-memory-settings .checkbox_label { display: flex; align-items: flex-start; gap: .5rem; margin: .65rem 0; line-height: 1.45; }
+.world-memory-settings .checkbox_label input { flex: 0 0 auto; margin-top: .25em; }
+.world-memory-settings .wm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--wm-gap); }
+.world-memory-settings .wm-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .65rem 0; }
+.world-memory-settings .wm-actions button { flex: 1 1 9rem; margin: 0; white-space: normal; min-height: 2.5rem; }
+.world-memory-settings .wm-primary-actions button { flex-basis: 6rem; }
+.world-memory-settings .wm-muted { opacity: .78; font-size: .88em; line-height: 1.5; overflow-wrap: anywhere; }
+.world-memory-settings small.wm-muted { display: block; margin: .4rem 0; }
+.world-memory-settings .wm-status { padding: .6rem .7rem; border-left: 3px solid var(--SmartThemeQuoteColor, #888); line-height: 1.45; overflow-wrap: anywhere; }
+.world-memory-settings .wm-record { padding: .7rem 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); min-width: 0; }
+.world-memory-settings .wm-record pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; max-height: 20rem; overflow: auto; }
+.world-memory-settings .wm-record header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.world-memory-settings .wm-record button { font-size: .88em; white-space: normal; min-height: 2.25rem; }
+.world-memory-settings .wm-archive:empty { display: none; }
+.world-memory-settings [hidden] { display: none !important; }
+.world-memory-settings :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #aaa); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .world-memory-settings .wm-grid { grid-template-columns: minmax(0, 1fr); }
+  .world-memory-settings .wm-actions button { flex-basis: 100%; }
+  .world-memory-settings .wm-primary-actions button { flex-basis: calc(50% - .5rem); }
+}
+.world-memory-settings [data-connection] { display: none; }
+.world-memory-settings:has(#wm_connection_source option[value="profile"]:checked) [data-connection~="profile"],
+.world-memory-settings:has(#wm_connection_source option[value="openai"]:checked) [data-connection~="openai"],
+.world-memory-settings:has(#wm_connection_source option[value="ollama"]:checked) [data-connection~="ollama"],
+.world-memory-settings:has(#wm_connection_source option[value="default"]:checked) [data-connection~="default"] { display: block; }

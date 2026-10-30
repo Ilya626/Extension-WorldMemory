@@ -1,131 +1,86 @@
-# World Memory
+# WorldMemory for SillyTavern
 
-[Русская инструкция](README_RU.md)
+[Русский — полная инструкция](README_RU.md) · [Detailed reference](docs/REFERENCE.md) · [Changes](CHANGELOG.md)
 
-**0.2.2 · alpha.** Character profiles and reusable World Info from Summaryception, with optional addressable history: a compact timeline that opens relevant original exchanges at their chronological positions.
+**Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-It makes **separate model requests through Summaryception's configured connection**, which can incur additional provider costs. It does not rewrite Summaryception's narrative summaries.
+**0.3.0 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
-## Quick start
+## What the model receives
 
-1. Install or update [Summaryception to 5.5.4-local.21 or later](https://github.com/Ilya626/Extension-Summaryception). Other forks may not provide the required companion API.
-2. For Russian chats, also install [Russian WI Forms](https://github.com/Ilya626/Extension-RussianWI). It is optional: ordinary keys such as `меч` can then match dictionary forms such as `мечом`.
-3. In ST's **Extensions → Install extension**, paste:
+For a normal chat reply, SillyTavern combines your character/setup, recent chat, selected earlier history and active World Info. **WorldMemory never inserts its entire archive into every reply.**
+
+| Part | Purpose | Default |
+| --- | --- | --- |
+| **Raw tail (tokens)** | Keep recent messages in their original form | 8,000 tokens |
+| **Max history tokens (soft target)** | Retrieve relevant earlier source excerpts in story order; edited or source-less summaries are labelled | 8,000 tokens, soft target |
+| **World Info · entity reference** | Supply reference entries through ST's native activation and budget | Separate chat-scoped book |
+| **Full RP prompt target (tokens)** | Show a size reference for the whole input, including character/setup and WI | 24,000 tokens, soft target |
+
+Raw chat and retrieved history have separate allowances. Whole history fragments can exceed their target; the full-prompt target is not a hard cap on ST's request. Neither limits the saved archive.
+
+**History answers “what happened?”; WI answers “who or what is this?”** History can recover a conversation in which a workshop keeper lent a visitor a key until morning. The keeper's WI entry describes the person, workshop and relevant relationships. It is reusable reference, not another scene-by-scene diary.
+
+## Install and connect
+
+1. In SillyTavern, open **Extensions → Install extension** and paste:
 
    ```text
    https://github.com/Ilya626/Extension-WorldMemory
    ```
 
-4. Reload ST, open a character chat and expand **World Memory**. In **Main characters to always track**, enter your cast, one name per line:
+   Install, reload the page, open a character chat, then **Extensions → WorldMemory**.
+2. Under **Summarizer connection → Connection**, select your background generation connection: **Current SillyTavern connection**, **SillyTavern Connection Profile**, **OpenAI-compatible API**, or **Ollama**. Complete the fields shown. Choose **L0 language**; **Response token override** at `0` inherits the connection setting.
+3. Under **Search and embeddings**, configure the embedding API. New installations enable **Search history by meaning (embeddings)** with **Embedding connection → API embeddings**:
 
-   ```text
-   Mira
-   Anton
-   ```
+   | Field | Starting value |
+   | --- | --- |
+   | **API URL** | Your provider's embedding API base URL; for Google's native API, `https://generativelanguage.googleapis.com` |
+   | **API key** | The key for that endpoint |
+   | **API format** | **Google / Gemini embeddings** |
+   | **Embedding model** | `gemini-embedding-001` |
+   | **Advanced embedding API settings → Dimensions** | `768` |
 
-5. Save an L0 summary in Summaryception, or click **Update memory now** to process existing packets. Review **Characters**, **Other records and sources**, or **Open lorebook**.
+   For an OpenAI-style endpoint, select **OpenAI-compatible embeddings** and enter its supported embedding model and dimensions. A chat model name is not an embedding model.
 
-Automatic updating and **Always include main character profiles** are enabled by default. Update through ST's extension manager, then reload the page. The manifest also enables native automatic updates where ST permits them.
+   **Blank URL/key fields inherit only from WorldMemory's own OpenAI-compatible API summarizer settings.** Native ST connections and Connection Profiles do not expose their saved credentials here; enter embedding URL/key explicitly. ST Vector Storage settings are not used.
+4. Keep **Enable WorldMemory** on. In **World Info · entity reference**, leave **Prepare and apply WI after saving L0** on if you want generated references. **Also find WI by meaning** is separate and off by default.
+5. Continue chatting. Older eligible messages are summarized automatically when a source packet is ready; **Summarize** starts this manually. Inspect saved memories in **L0 archive** and references with **Open lorebook**.
 
-## A small example
+No local weights or compiler are needed for API embeddings. Without embeddings, keyword history search remains available. Optional [Russian WI Forms](https://github.com/Ilya626/Extension-RussianWI) adds Russian word-form matching to native WI keys, for example `меч` → `мечом`.
 
-Fictional played scene: *Anton, the workshop keeper, lends Mira a brass key until morning. Mira tries the cabinet lock, but it does not open.* Suitable profiles would be:
+## How memory grows
 
-| Record | Example reference |
-| --- | --- |
-| Mira — character | Borrowed Anton's brass key until morning. Tried the cabinet lock without opening it. |
-| Anton — character | Workshop keeper. Lent Mira the brass key until morning. |
-| Brass key — object | Currently borrowed by Mira from Anton. The recorded attempt did not open the cabinet; the reason is unknown. |
+**L0** is a saved narrative summary of one source packet. WorldMemory keeps a growing archive of these packets, without layer transfers or repeatedly squeezing the whole chat into one summary.
 
-This illustrates the intended output, not a guaranteed model response. Attempts must not become successes. Unplayed events and character-card secrets are not evidence. A named character without supported facts may remain an empty profile; a name alone does not supply a biography.
+A new packet uses **two sequential background generation requests** through the summarizer connection:
 
-## Native World Info
+1. **Write and save L0.** The model receives the packet's original messages and the **complete immediately preceding L0** for continuity. The new L0 is saved before the next step.
+2. **Prepare search notes and optional WI.** The model receives the saved L0 and the same originals to prepare a short navigation thread (L′), source-linked search excerpts and entity-reference updates. Previous summaries and WI help identify subjects; the packet's originals supply evidence for new claims.
 
-The addon creates a **separate native book for the current chat**. Your existing chat-book assignment and original lorebooks stay in place. Entries join native scanning through `WORLDINFO_ENTRIES_LOADED`; you do not need to change the existing binding or manually attach the generated book.
+These requests are separate from your ordinary chat reply. Embedding requests also send indexed text and search queries to the configured embedding service. Changed sources are indexed as needed; unchanged vectors are reused. Background generation can receive native WI as read-only context, controlled by **Advanced summarizer context**.
 
-Main profiles use ST's **Constant** strategy by default. Other records use ordinary keyword activation. Russian WI Forms handles inflections during scanning without writing generated regexes into the book. Records still follow the native WI budget, disabled flags and insertion rules; Constant does not bypass the budget.
+The default source packet is 24,000 tokens. The raw tail and **BlindZone (recent exchanges)** protect recent messages; BlindZone defaults to one exchange. Find these settings and **Pause automatic summarization** under **Advanced history and packet settings**. Original messages remain in the chat; hiding controls decide which summarized messages are sent to the model. Reapplying automatic hiding is off by default to preserve manual visibility choices.
 
-The default position is **In-chat @ Depth**, depth **2**. Before/After Main Prompt and Before/After Author's Note are also available. Your ST prompt configuration determines the final order.
+## Review, edit and recover
 
-## Optional history with selective detail
+- **Edit L0:** expand a packet and use **Save text**. **Regenerate** rewrites it from linked sources; **Refine** also supplies your existing text. **Advanced summary prompts** exposes saved/custom L0 system instructions and the user template; it controls L0 prose only, not the separate search-note/WI instructions.
+- **If search-note/WI preparation fails:** L0 stays saved. Use **Rebuild search notes / WI** for one packet or **Prepare missing search notes / WI** for unfinished packets. These repeat the second request without rewriting L0. **Apply saved WI** reapplies saved results locally, without a model request.
+- **Protect a WI edit:** use **Keep manual**; **Allow automatic updates** opts the entry back in. Author lorebooks and bindings stay intact. Generated entries follow ST's keyword, Constant, group and budget rules; semantic WI adds candidates to that same scan.
+- **If sources change:** affected L0 is marked **SOURCES CHANGED** and stale retrieval evidence is excluded. Regenerate that packet to refresh it. Manual WI edits and visibility choices are preserved.
 
-Open **History with selective detail** and enable **Build and use addressable L0 / L0′ history**, then click **Update memory now**. It is off by default. Existing summaries and custom prompts are preserved.
+[Detailed controls, placement, search and backups](docs/REFERENCE.md) · [Optional local EmbeddingGemma 2 Q8: Windows and Termux preview](docs/LOCAL_EMBEDDINGS.md)
 
-The same request that extracts WI also receives the packet's **complete original sources**, grouped into whole exchanges. It returns a detailed episode (**L0 detail**), a short causal anchor (**L0′**), and search keys for each addressed group. The 4,000-token optional-detail setting applies to WI-only mode; history mode needs the complete source packet. This increases input/output tokens. For large packets, consider an 8,192-token response limit and check the result status.
+## Update or migrate
 
-Before a normal RP reply, the current post and previous assistant reply search detailed episodes **and original exchanges**. Results choose which parts to open. They are assembled in source order, never appended as a relevance-sorted pile:
+Export **WorldMemory → Portable backup → Export backup**, and export the ST chat separately to retain originals and swipes. Update **World Memory** through ST's extension manager, then reload. **Existing preferences are preserved**; updating does not enable semantic search if you previously disabled it.
 
-```text
-short scene 1 → original exchange from scene 2 → short scene 3 → live chat
-```
+For an existing Summaryception setup, WorldMemory imports the saved archive and relevant settings. If the old extension is active, WorldMemory saves the import, disables the old runtime and reloads once. Inspect **L0 archive** before continuing; do not run both archive writers for the same chat. Imported summaries without available originals remain summary-only.
 
-A partial excerpt keeps a short scene frame. If originals cover the entire episode, they replace its summary. The history uses Summaryception's selected insertion position. It does not unhide chat messages or alter the live tail/Blind Zone. WI continues through native ST scanning and its own insertion settings.
+**Import backup replaces the receiving chat's WorldMemory state.** Export that state first. A lorebook alone cannot restore history; keep both the WorldMemory backup and the original chat.
 
-Version 0.2.2 preserves an already selected detailed L0 when only part of its original sources is included. Full originals replace that detail only when they cover the whole episode. Automatic paragraph/sentence extraction is not enabled.
+## Preview limits
 
-Defaults: **4,000 tokens** for the compact timeline and **4,000 additional tokens** for selected detail. Whole exchanges are kept; an oversized candidate is skipped, allowing smaller candidates to fit. If the compact timeline itself cannot fit, source links are stale/overlapping, or preparation fails, the ordinary Summaryception layers remain active. This first implementation does not recursively shrink an indefinitely growing L0′ timeline.
+Review important memories and references: generation can omit details or confuse identity and conditions; retrieval depends on the query, sources and models. This preview does not promise complete recall. Local embeddings are optional; the Termux-Gemma scripts remain a preview, with real-phone qualification deferred.
 
-For a larger history allowance, set Additional detail budget from what remains after the actual raw tail and compact timeline. For example, a **32k history allowance** with a **16k tail** and **3.4k compact timeline** leaves about **12.6k** for detail. This is an example, not an automatic budget mode. System/card/WI and response tokens need room outside that history allowance in the main model's context. Existing settings are preserved.
-
-### A simple post-response structure
-
-With **Ask the RP model for a hidden scene / keys / carry block** enabled, the model is instructed to append:
-
-```text
-Anton hands Mira the key. “Bring it back before morning.”
-<memory_hint>
-anchor: Anton lends Mira the key
-keys: Anton; Mira; brass key; borrowed key
-carry: return the key before morning
-</memory_hint>
-```
-
-The post is visible; the service block is hidden during streaming and detached into that message's selected-swipe metadata after completion. There are exactly three short fields; `-` means empty. No tool calling is required. Hints are search suggestions, not established world facts. Missing or malformed markup never rejects the RP reply. Editing its text invalidates the old hint; another swipe keeps its own hint.
-
-### Keyword search and optional embeddings
-
-Local keyword search is the default. Russian WI Forms **0.1.2+** supplies dictionary lemmas for history search as well as its existing native WI inflections. No extra generative call is made before each RP reply.
-
-Cold embedding indexing can take longer than a normal lookup. Version 0.2.1 uses a 120-second inactivity timeout, renewed after each native vector response, instead of a 10-second limit on the entire index/query sequence. Already cached vectors are reused.
-
-For optional semantic history search, first configure a hosted embedding provider/model and its key in **ST Vector Storage**, then enable **Also search using ST's configured hosted embeddings** here. Supported sources: OpenAI, OpenRouter, Cohere, Together AI, Electron Hub, Chutes and NanoGPT. Only this explicit switch allows embedding requests; provider charges may apply. The addon uses native ST vector routes, caches by text, deletes obsolete vectors and fuses semantic/keyword candidate ranks. An unavailable service falls back to keywords. It downloads no model and runs no reranker on the phone. This switch does **not** force semantic activation of native WI entries.
-
-### Storage and maintenance
-
-The original chat and Summaryception archive remain authoritative. Message metadata holds the selected reply's hint and text fingerprint. `chatMetadata.worldMemory.history` holds packet revisions and source-linked detailed/compact episodes. Addresses are assigned by code from the exact saved source IDs, not guessed by the model. There is no separate database for the text memory.
-
-Edits, swipes, deletion and summary regeneration invalidate prepared context. Deleted packets are pruned on the next memory update; changed packets are rebuilt from their current sources. A failed optional annotation keeps the valid original L0 and any valid same-revision episodes; it does not repeatedly retry old packets automatically. **Update memory now** can retry explicitly. Stop keeps completed saves.
-
-World Memory backup includes these episodes. Also export the ST chat to retain original messages and per-swipe hints; a lorebook alone cannot restore the history. Importing another chat's World Memory backup keeps its references as manual records and clears old history/source links. Disable selective history to return to ordinary Summaryception injection.
-
-## Updating and keeping control
-
-- **Automatic updates** follow saved memory changes and process new or revised L0 packets. Original L0 evidence remains available after promotion to higher Summaryception layers.
-- **Update memory now** reprocesses available, non-stale saved packets, including previously processed ones. A run can make several requests; rebuilding affected records can require more.
-- **Stop** cancels current work. Already saved packets remain; completed work is not rolled back.
-- Contributions track packet IDs and source-message IDs. Removing a Summaryception packet removes its automatic contributions on the next update. Affected automatic records are rebuilt from remaining contributions or deleted when none remain. Manual records are preserved.
-- Edited, deleted or swiped source messages make affected linked packets stale. Regenerate those summaries in Summaryception before updating WI.
-- Use **Keep manual** before maintaining a record yourself. Changes to generated titles, primary keys, content, Constant and disabled status are also detected. Protected records are skipped; **Allow automatic updates** opts them back in. Manually added native entries are outside automatic ownership.
-
-## Request defaults
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Maximum response tokens | **4096** | Per response; **0** inherits Summaryception's response setting. |
-| Original-message detail tokens per packet | **4000** | Optional whole messages, selected newest first. The complete saved L0 summary is always supplied. |
-| Prior entry-fact tokens per request | **6000** | Retained facts supplied during extraction, considering main profiles first. Not a limit on the entire prompt or every rebuild. |
-| Target tokens per entry | **160** | Writing guidance, not a strict size cap. |
-
-Language can follow the source or be set to English/Russian. Model context limits still apply: the complete summary and entry index also take space; a large rebuild can exceed the extraction fact budget.
-
-## Chat copies and backups
-
-A branch or renamed/copied chat detected under a different chat ID gets its own book when updated. Owned records are copied rather than written through to the source chat's book. Review source links after trimming messages.
-
-**Export backup** saves the book, cast names and packet links. **Import backup replaces this chat's World Memory book contents**; export the current version first if needed. A backup from another chat becomes protected manual records with its old contribution links cleared. It does not transfer that chat's Summaryception packets. Native lorebook JSON can also be imported through ST's World Info editor, but connecting a book there alone does not establish automatic ownership or chat linkage.
-
-## Alpha limits
-
-Review important results in **Open lorebook**. Extraction, identity matching and completeness depend on the model; omissions remain possible. History groups follow exchange/token boundaries, not guaranteed semantic scene boundaries. Shared names and broad keys can activate the wrong native record. Large histories can require many paid requests. Legacy summaries may lack original-message links. Hosted semantic history search is optional; semantic WI activation and local rerankers are not implemented. Compatibility with every ST version, provider or addon is not promised.
-
-Code license: [MIT](LICENSE).
+License: [AGPL-3.0](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md). Bundled Summaryception modules retain their [vendor license](vendor/summaryception/LICENSE).

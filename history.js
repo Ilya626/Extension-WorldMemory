@@ -95,7 +95,12 @@ export function historyNodes(snapshot, stored) {
         const saved = stored?.[packet.id];
         const episodes = saved?.revision === revision(packet) ? saved.episodes : null;
         const byId = new Map(packet.sources.map(s => [s.id, s]));
-        const items = episodes || [{ id: packet.id, sourceIds: packet.sourceMessageIds, compact: packet.text, detail: packet.text, keys: [] }];
+        const metadata = packet.memoryMetadata;
+        const items = typeof metadata?.lprime?.text === 'string' && metadata.lprime.text.trim() ? [{ id: packet.id, sourceIds: packet.sourceMessageIds,
+            compact: metadata.lprime.text, detail: packet.text,
+            keys: Array.isArray(metadata.lprime.keys) ? metadata.lprime.keys.filter(key => typeof key === 'string') : [],
+            facts: Array.isArray(metadata.facts) ? metadata.facts : [] }]
+            : episodes || [{ id: packet.id, sourceIds: packet.sourceMessageIds, compact: packet.text, detail: packet.text, keys: [] }];
         for (const item of items) {
             const sources = item.sourceIds.map(id => byId.get(id)).filter(Boolean);
             // Overlapping legacy packets cannot form a disjoint timeline: fall back rather than duplicate it.
@@ -116,28 +121,59 @@ export function candidates(nodes) {
         search: group.map(s => `${s.text}\n${s.hint?.fingerprint === hash(s.text) ? [s.hint.anchor, s.hint.keys, s.hint.carry].filter(Boolean).join('; ') : ''}`).join('\n') }))]);
 }
 const label = sources => sources.length ? `messages ${sources.map(s => s.index).join(', ')}` : 'legacy memory';
+function mergedSpans(spans) {
+    const merged = [];
+    for (const span of spans.slice().sort((a, b) => a.start - b.start)) {
+        const last = merged.at(-1);
+        if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
+        else merged.push({ start: span.start, end: span.end });
+    }
+    return merged;
+}
+function sourceCovered(source, raw) {
+    const matching = raw.filter(doc => doc.sourceIds.includes(source.id));
+    if (matching.some(doc => !doc.sourceSpans)) return true;
+    const spans = mergedSpans(matching.flatMap(doc => doc.sourceSpans || []).filter(span => span.sourceId === source.id));
+    return spans.length === 1 && spans[0].start === 0 && spans[0].end >= source.text.length;
+}
+function renderRaw(node, raw) {
+    const legacy = raw.filter(doc => !doc.sourceSpans);
+    const covered = new Set(legacy.flatMap(doc => doc.sourceIds));
+    const blocks = legacy.map(doc => ({ order: doc.order, start: 0,
+        text: `[Original ${label(node.sources.filter(s => doc.sourceIds.includes(s.id)))}]\n${doc.text}` }));
+    for (const source of node.sources) {
+        if (covered.has(source.id)) continue;
+        const spans = mergedSpans(raw.flatMap(doc => doc.sourceSpans || [])
+            .filter(span => span.sourceId === source.id && Number.isInteger(span.start) && Number.isInteger(span.end)
+                && span.start >= 0 && span.end <= source.text.length && span.end > span.start));
+        for (const span of spans) blocks.push({ order: source.index, start: span.start,
+            text: `[Original message ${source.index}]\n${source.name}: ${source.text.slice(span.start, span.end)}` });
+    }
+    return blocks.sort((a, b) => a.order - b.order || a.start - b.start).map(block => block.text);
+}
 function renderNode(node, selection) {
     const raw = selection.filter(doc => doc.node === node.id && doc.kind === 'raw').sort((a, b) => a.order - b.order);
     const detail = selection.some(doc => doc.node === node.id && doc.kind === 'detail');
-    const covered = new Set(raw.flatMap(doc => doc.sourceIds));
-    const full = node.sourceIds.length && node.sourceIds.every(id => covered.has(id));
+    const full = node.sourceIds.length && node.sources.length === node.sourceIds.length
+        && node.sources.every(source => sourceCovered(source, raw));
     // A partial original cannot replace details from the episode's other sources.
     const frame = full ? '' : `[${label(node.sources)} · ${detail ? 'L0 detail' : raw.length ? 'scene frame' : "L0′"}]\n${detail ? node.detail : node.compact}`;
-    return [frame, ...raw.map(doc => `[Original ${label(node.sources.filter(s => doc.sourceIds.includes(s.id)))}]\n${doc.text}`)].filter(Boolean).join('\n');
+    return [frame, ...renderRaw(node, raw)].filter(Boolean).join('\n');
 }
-export async function assemble(nodes, ranked, { baseTokens, zoomTokens, countTokens }) {
+export async function assemble(nodes, ranked, { baseTokens, zoomTokens, countTokens, format = text => text }) {
     const prefix = 'Played history in chronological order. Original excerpts are historical evidence; later events and the live chat supersede earlier states. Claims, plans and attempts are not verified outcomes.\n';
     const render = selection => prefix + nodes.map(node => renderNode(node, selection)).join('\n\n');
-    const base = render([]), baseline = await countTokens(base);
+    const base = render([]), baseline = await countTokens(format(base));
     if (baseline > baseTokens) return { text: null, reason: `Compact history needs ${baseline} tokens (budget ${baseTokens}); using Summaryception's layered memory.`, selected: [] };
     let selected = [], text = base, used = baseline;
     for (const doc of ranked.slice(0, 30)) {
         // Drop a detailed summary only when full originals cover all of its sources.
         if (selected.some(item => item.id === doc.id)) continue;
         let trial = [...selected, doc];
-        const covered = new Set(trial.filter(item => item.kind === 'raw').flatMap(item => item.sourceIds));
-        trial = trial.filter(item => item.kind !== 'detail' || !item.sourceIds.length || !item.sourceIds.every(id => covered.has(id)));
-        const next = render(trial), size = await countTokens(next);
+        const raw = trial.filter(item => item.kind === 'raw');
+        trial = trial.filter(item => item.kind !== 'detail' || !item.sourceIds.length
+            || !nodes.find(node => node.id === item.node)?.sources.every(source => sourceCovered(source, raw)));
+        const next = render(trial), size = await countTokens(format(next));
         if (size <= baseline + zoomTokens) { selected = trial; text = next; used = size; }
     }
     return { text, selected, tokens: used, baseline };
