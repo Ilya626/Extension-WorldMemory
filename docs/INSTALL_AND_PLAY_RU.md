@@ -11,6 +11,15 @@ WorldMemory работает самостоятельно. Russian WI Forms ну
 
 Summaryception, MemoryBooks, MarkUps, Tavern Helper и ST Vector Storage не являются зависимостями WorldMemory. Сама сторонняя карточка может иметь свои зависимости — проверяйте инструкцию её автора. Не запускайте Summaryception вторым владельцем памяти того же чата.
 
+## Какие комбинации использовать
+
+- **WorldMemory + Russian WI Forms** — новая система: подбор прошлой истории и отдельный native WI с русскими словоформами.
+- К ней можно добавить **[MarkUps](https://github.com/Ilya626/Extension-MarkUps)** для текущих видимых списков/квестов и скрытых заметок. Модель обновляет их командами внутри своего обычного ответа, без отдельной фоновой генерации.
+- **[Наш Summaryception](https://github.com/Ilya626/Extension-Summaryception) + Russian WI Forms**, по желанию MarkUps — альтернативный вариант с памятью в слоях L0–L4. Embeddings для самостоятельного Summaryception не нужны.
+- **Russian WI Forms и MarkUps** работают и без системы памяти, вместе или по отдельности.
+
+Текущий WorldMemory и Summaryception — два альтернативных владельца памяти. При переходе WorldMemory импортирует старый архив и отключает Summaryception; оставлять оба активными для одного чата не следует. Инструкции старого WorldMemory 0.2 companion не относятся к текущему standalone 0.3.3. Перечень комбинаций описывает назначение и границы интеграции, а не отдельный живой прогон всех расширений вместе.
+
 ## Установка и обновления с GitHub
 
 1. В ST откройте **Extensions → Install extension**, вставьте адрес WorldMemory из таблицы и установите.
