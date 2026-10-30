@@ -8,6 +8,8 @@
 
 **0.3.3 · самостоятельная preview-версия.** Устанавливать Summaryception не нужно. По умолчанию используются API-эмбеддинги; локальная модель необязательна.
 
+**Что устанавливать:** [WorldMemory](https://github.com/Ilya626/Extension-WorldMemory) и, для русских словоформ ключей WI, [Russian WI Forms](https://github.com/Ilya626/Extension-RussianWI). Словарь уже включён во второй аддон. Summaryception, MemoryBooks, MarkUps, Tavern Helper и ST Vector Storage для работы WorldMemory не требуются. [Короткая инструкция: установка, обновление и импорт готового чата](docs/INSTALL_AND_PLAY_RU.md).
+
 ## Что получает модель
 
 Для обычного игрового ответа SillyTavern собирает карточку и инструкции, свежие сообщения, выбранную раннюю историю и активный World Info. **WorldMemory не вставляет весь архив в каждый ответ.**
