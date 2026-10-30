@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { hash } from '../history.js';
 import { storySpineSources, readStorySpine, currentStorySpine } from '../story-spine.js';
 import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from '../history-selection.js';
+import { createArchive, putPacket, archiveSnapshot } from '../archive-store.js';
+import { installHistory } from '../history-runtime.js';
 
 const countTokens = async text => text.split(/\s+/u).filter(Boolean).length;
 const source = (id, index, text) => ({ id, index, name: 'Narrator', isUser: false, text });
@@ -17,7 +19,7 @@ const hit = (packet, source, start = 0, end = source.text.length) => ({ id: `hit
     kind: 'raw', node: packet.id, sourceIds: [source.id], sourceSpans: [{ sourceId: source.id, start, end,
         offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) }] });
 
-test('global chronology includes unqueried story sections in source order', async () => {
+test('global chronology includes unqueried story sections in source order', async t => {
     const first = source('a', 1, 'The bridge was closed.'), last = source('c', 9, 'The council has not answered.');
     const p1 = packet('early', [first], ['A bridge closed.']), p2 = packet('late', [last], ['A decision remains pending.']);
     const snapshot = { packets: [p2, p1] }, nodes = archiveHistoryNodes(snapshot);
@@ -27,6 +29,33 @@ test('global chronology includes unqueried story sections in source order', asyn
     assert.equal(result.spineInfo.complete, true);
     assert.equal(result.selected.length, 0);
     assert.equal(currentStorySpine(p1), p1.storySpine);
+    // The reader baseline remains available when the independent search times out.
+    const previousDocument = globalThis.document, previousFetch = globalThis.fetch;
+    const events = { MESSAGE_RECEIVED: 'reply', GENERATION_ENDED: 'end', CHAT_COMPLETION_PROMPT_READY: 'cc',
+        GENERATE_BEFORE_COMBINE_PROMPTS: 'tc', GENERATE_AFTER_DATA: 'data' };
+    const context = { chatId: 'fixture', chatMetadata: {}, chat: [{ is_user: true, mes: 'What about the bridge?' }],
+        extensionSettings: {}, eventTypes: events, event_types: events, eventSource: { on() {}, makeFirst() {} },
+        getTokenCountAsync: countTokens, setExtensionPrompt() {} };
+    globalThis.document = { getElementById: () => null };
+    globalThis.fetch = async (_url, options) => new Promise((_, reject) => {
+        if (options.signal.aborted) reject(options.signal.reason);
+        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+        const runtime = installHistory({ ctx: () => context, settings: () => ({ enabled: true, injectionPosition: 0,
+            historySemantic: true, historyMaxTokens: 8000, historyEmbeddingAPI: { url: 'https://example.invalid', key: 'fixture' } }),
+            bridge: () => ({ snapshot: () => ({ ...snapshot, chatId: context.chatId, chat: context.chat }) }) });
+        const preparing = runtime.prepare(context.chat, 24000, null, 'normal');
+        await new Promise(resolve => setImmediate(resolve));
+        assert.ok(runtime.inspect().text.includes('A bridge closed.'));
+        t.mock.timers.tick(120000);
+        await preparing;
+        assert.ok(runtime.inspect().text.includes('A decision remains pending.'));
+        assert.match(runtime.inspect().warning, /baseline kept/u);
+    } finally {
+        t.mock.timers.reset(); globalThis.document = previousDocument; globalThis.fetch = previousFetch;
+    }
 });
 
 test('a partial raw hit expands its bounded cell in place and retains other cells', async () => {
@@ -63,6 +92,20 @@ test('legacy and manual accounts remain whole; summary-only skeleton never becom
     assert.equal(result.spineInfo.missing, 1);
     assert.ok(result.warning.includes('Backfill is explicit'));
     assert.equal(result.spineInfo.summaryOnly, 1);
+    const archive = createArchive();
+    putPacket(archive, { ...saved, id: 'later', storySpine: null, turnRange: [20, 25], order: undefined });
+    putPacket(archive, { ...saved, id: 'earlier', storySpine: null, turnRange: [1, 3], order: undefined });
+    const restored = archiveSnapshot(archive);
+    assert.deepEqual(restored.packets.map(p => p.id), ['earlier', 'later']);
+    // Even unknown legacy positions cannot interleave local offsets of different packets.
+    const nested = [0, 1].map(i => ({ ...saved, id: `saved-${i}`, order: 0, text: 'Opening. '.repeat(90) }));
+    for (const p of nested) {
+        const cells = storySpineSources([{ id: p.id, text: p.text }], { summaryOnly: true, maxCharacters: 256 });
+        p.storySpine = readStorySpine(`<story_spine>${JSON.stringify({ nodes: cells.map(s => ({ text: p.id, src: [s.handle] })) })}</story_spine>`,
+            cells, { backfill: true, savedText: p.text }).storySpine;
+    }
+    const restoredStory = await selectHistory(archiveHistoryNodes({ packets: nested }), [], { targetTokens: 8000, countTokens });
+    assert.ok(restoredStory.text.lastIndexOf('saved-0') < restoredStory.text.indexOf('saved-1'));
 });
 
 test('skeleton and in-place details share the soft budget without truncating the baseline', async () => {

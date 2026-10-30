@@ -1,4 +1,5 @@
 // Growing L0 records. No ST globals, token limits, promotions or source-message writes.
+import { currentStorySpine } from './story-spine.js';
 export const ARCHIVE_VERSION = 1;
 // Same text revision used by saved memory_metadata and existing source spans.
 const hash = text => {
@@ -159,7 +160,7 @@ export function archiveSnapshot(archive, context = {}, { effective = true } = {}
                 : Boolean(message.hidden), hint: message.extra?.worldMemoryHint || message.hint || null,
             fingerprint: sourceFingerprint(message) }]];
     }));
-    const packets = readArchive(archive, { effective }).map(record => {
+    const packets = readArchive(archive, { effective }).map((record, position) => {
         const ids = record.sourceMessageIds, sources = ids.map(id => messages.get(id)).filter(Boolean)
             .sort((a, b) => a.index - b.index);
         const fingerprints = Object.fromEntries(ids.map(id => [id, messages.has(id)
@@ -167,14 +168,20 @@ export function archiveSnapshot(archive, context = {}, { effective = true } = {}
         const textRevision = hash(record.text), metadata = record.memoryMetadata;
         const metadataCurrent = metadata?.textRevision === textRevision && (!metadata.sourceFingerprints
             || ids.every(id => metadata.sourceFingerprints[id] === fingerprints[id]));
-        return { ...record, textRevision, sources, sourceFingerprints: fingerprints,
+        const packet = { ...record, textRevision, sources, sourceFingerprints: fingerprints,
             memoryMetadata: metadataCurrent ? copy(metadata) : null,
             stale: ids.some(id => !messages.has(id) && !record.unavailableSourceIds?.includes(id)) || Boolean(record.sourceFingerprints
                 && ids.some(id => !(!messages.has(id) && record.unavailableSourceIds?.includes(id)) && record.sourceFingerprints[id] !== undefined
                     && record.sourceFingerprints[id] !== messages.get(id)?.fingerprint
                     && record.sourceFingerprints[id] !== fingerprints[id])),
             sourceStatus: ids.length && sources.length === ids.length ? 'linked' : 'summary-only',
-            order: sources.length ? Math.min(...sources.map(source => source.index)) : record.order ?? Number.MAX_SAFE_INTEGER };
+            order: sources.length ? Math.min(...sources.map(source => source.index)) : record.order ?? record.turnRange?.[0] ?? position };
+        const spineFingerprints = record.storySpine?.sourceFingerprints;
+        packet.storySpine = (record.storySpine?.sourceStatus === 'summary-only' || !spineFingerprints
+            || ids.every(id => spineFingerprints[id] === fingerprints[id]))
+            && currentStorySpine(packet) ? copy(record.storySpine) : null;
+        if (record.storySpine && !packet.storySpine) packet.storySpineError = 'Story skeleton no longer matches the saved L0 or its source messages.';
+        return packet;
     }).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
     return { chatId: context.chatId || '', metadata: context.chatMetadata, chat,
         characterName: context.characterName ?? context.characters?.[context.characterId]?.name ?? '',

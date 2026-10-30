@@ -2,16 +2,18 @@
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header"><b>WorldMemory</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
     <div class="inline-drawer-content">
-      <p class="wm-muted">A growing L0 archive for this chat. Relevant earlier history is retrieved before each reply; the archive is never inserted in full.</p>
+      <p class="wm-muted">A growing L0 archive for this chat. A compact chronological skeleton keeps the whole story visible; relevant originals expand their matching places before each reply.</p>
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
       <div class="wm-actions wm-primary-actions"><button id="wm_summarize" class="menu_button" type="button">Summarize</button><button id="wm_stop" class="menu_button" type="button">Stop</button></div>
       <div id="wm_status" class="wm-status" role="status" aria-live="polite">Loading…</div>
 
       <section class="wm-section" aria-labelledby="wm_archive_heading">
         <h4 id="wm_archive_heading">L0 archive</h4>
-        <p class="wm-muted">Each packet saves a new L0 using its original messages and the complete preceding L0. Search notes and optional WI are prepared after L0 is saved. If that step fails, the saved L0 remains available.</p>
+        <p class="wm-muted">Each packet saves a new L0 and its compact story skeleton in one response, using its original messages and the complete preceding L0. Search notes and optional WI are prepared after L0 is saved. An invalid service tail never discards valid L0 prose.</p>
         <div id="wm_archive_status" class="wm-muted" role="status" aria-live="polite"></div>
         <div id="wm_archive" class="wm-archive"></div>
+        <button id="wm_backfill_spine" class="menu_button" type="button">Prepare missing story skeleton</button>
+        <small class="wm-muted">New L0 replies include their skeleton in the same response. Old records need one preparation request each; L0 text is kept. Until prepared, their full saved account is used and may exceed the soft target. Manual text remains authoritative.</small>
         <button id="wm_backfill_metadata" class="menu_button" type="button">Prepare missing search notes / WI</button>
         <small class="wm-muted">Resumes the second step for saved L0 records without rewriting them. Uses the summarizer connection below. Stop cancels processing.</small>
       </section>
@@ -22,7 +24,7 @@
           <div class="wm-field"><label for="wm_raw_tail">Raw tail (tokens)</label><input id="wm_raw_tail" data-setting="retainedContextTokens" class="text_pole" type="number" min="0" step="500"></div>
           <div class="wm-field"><label for="wm_history_max">Max history tokens (soft target)</label><input id="wm_history_max" data-setting="historyMaxTokens" class="text_pole" type="number" min="1" step="500"></div>
         </div>
-        <small class="wm-muted">The raw tail keeps recent messages separate from retrieved earlier history. Max history tokens applies only to retrieved history: whole fragments may exceed it with a warning. Neither setting limits the archive.</small>
+        <small class="wm-muted">Max history tokens covers the complete story skeleton, expanded originals and labels together. The raw tail is separate. Whole fragments and the full skeleton may exceed this soft target with a warning. Neither setting limits the archive.</small>
         <div id="wm_history_status" class="wm-muted" role="status" aria-live="polite"></div>
         <div id="wm_prompt_size" class="wm-muted" role="status"></div>
         <details class="wm-advanced"><summary>Advanced history and packet settings</summary>

@@ -34,7 +34,7 @@ export function historyPacketThreads(nodes) {
 
 /** targetTokens excludes the live raw tail, WI and system/card. It is a soft target. */
 export async function selectHistory(nodes, ranked, { targetTokens, countTokens, format = text => text,
-    storyNodes = nodes, excludedSourceIds = [] }) {
+    storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false }) {
     const target = Math.max(0, Number(targetTokens) || 0), excluded = new Set(excludedSourceIds);
     const sourceMap = new Map(storyNodes.flatMap(node => node.sources || []).map(source => [source.id, source]));
     const cells = storySpineCells(storyNodes).filter(cell => !cell.sourceSpans.length
@@ -44,7 +44,9 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
         if (!bySource.has(span.sourceId)) bySource.set(span.sourceId, []);
         bySource.get(span.sourceId).push({ cell, span });
     }
-    const prefix = 'Earlier story in source order. Short steps are saved summaries; expanded steps quote their originals in place. Plans, claims, private thoughts and out-of-character scenario notes retain their original status. […] marks omitted source text. The separate recent chat continues this chronology and supersedes older state.\n';
+    const prefix = 'Earlier story in source order. Short steps are saved summaries; expanded steps quote their originals in place. Plans, claims, private thoughts and out-of-character scenario notes retain their original status. […] marks omitted source text. '
+        + (nativeOverlap ? 'Some archived originals are also visible in the separate chat. Those repeated older messages belong to their original events, not new events after this timeline. Only genuinely later events supersede earlier state.\n'
+            : 'The separate recent chat continues this chronology and supersedes older state.\n');
     function render(expanded) {
         const blocks = [];
         for (const cell of cells) {
@@ -104,7 +106,8 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
     }
     const missing = cells.filter(cell => cell.kind === 'legacy').length, stale = cells.filter(cell => cell.kind === 'stale').length;
     const overflowTokens = Math.max(0, tokens - target);
-    const warnings = [missing ? `${missing} saved section(s) lack a current compact skeleton; saved accounts or their complete originals were kept. Backfill is explicit.` : '',
+    const warnings = [nativeOverlap ? 'Possible repeats: some archived messages are also left visible in native chat. ST may trim them during assembly; the story baseline is kept to avoid losing their only representation.' : '',
+        missing ? `${missing} saved section(s) lack a current compact skeleton; saved accounts or their complete originals were kept. Backfill is explicit.` : '',
         stale ? `${stale} changed-source section(s) are marked unavailable, not reused as current history.` : '',
         overflowTokens ? `Story skeleton and details use ${tokens} estimated tokens (soft target ${target}); the chronological baseline was not truncated.` : ''];
     return { ...result, selected, tokens, baselineTokens, targetTokens: target, overflowTokens,

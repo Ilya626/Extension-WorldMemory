@@ -1,7 +1,7 @@
 import { HINT_PROMPT, hash, splitHint, terms } from './history.js';
 import { createEmbeddingVectorClient } from './embedding-vector-client.js';
 import { createHistoryVectorRetrieval, HISTORY_VECTOR_CONTENT_REVISION } from './history-vector-retrieval.js';
-import { archiveHistoryNodes, selectHistory } from './history-selection.js';
+import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history-selection.js';
 import { installHistoryInjection } from './history-injection.js';
 import { semanticWIQuery } from './semantic-wi-runtime.js';
 
@@ -24,8 +24,8 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     const snapshot = () => bridge()?.snapshot?.();
     const profileId = () => { try { return embeddings.profile().id; } catch { return 'unconfigured'; } };
     const key = view => JSON.stringify([view.chatId, view.packets.map(p => [p.id, p.textRevision, p.sourceFingerprints, p.stale,
-        p.order, p.sources.map(source => [source.id, source.index, source.hidden, source.hint]),
-        hash(JSON.stringify(p.memoryMetadata))]), view.chat.slice(-2).map(m => [m.is_user, m.is_system, m.mes]),
+        p.order, p.sources.map(source => [source.id, source.index, source.hidden, source.is_system, source.hint]),
+        hash(JSON.stringify(p.memoryMetadata)), hash(JSON.stringify(p.storySpine)), p.manual]), view.chat.slice(-2).map(m => [m.is_user, m.is_system, m.mes]),
         settings().historyMaxTokens, settings().historySemantic, profileId(), tokenizerKey()]);
     const getText = () => { if (!settings().enabled || !prepared) return ''; const current = snapshot();
         return current && prepared.key === key(current) ? prepared.text || '' : ''; };
@@ -66,16 +66,28 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         }
         controller?.abort();
         const view = snapshot(), metadata = ctx().chatMetadata, snapshotKey = key(view), run = ++serial;
-        const nodes = archiveHistoryNodes(view), query = semanticWIQuery(view.chat);
-        if (!nodes.length) { prepared = null; injection.refresh(); return; }
+        const nodes = archiveHistoryNodes(view), storyNodes = archiveStoryNodes(view), query = semanticWIQuery(view.chat);
+        if (!storyNodes.length) { prepared = null; injection.refresh(); return; }
+        // This is pre-trimming visibility, not proof that an original survives
+        // in the final native prompt. Warn, but never remove its saved coverage.
+        const visible = new Set(view.chat.filter(m => !m.is_system).map(m => m.sc_message_id || m.extra?.sc_message_id || m.id));
+        const nativeOverlap = storyNodes.some(node => node.sources.some(source => visible.has(source.id)));
         const abort = new AbortController(); controller = abort;
         // Edits/saves invalidate serial. Avoid cloning and hashing the entire
         // growing archive for every token-count or embedding progress callback.
         const isCurrent = () => run === serial && ctx().chatMetadata === metadata && ctx().chat === view.chat;
         const output = document.getElementById('wm_history_status');
-        let timeout, warning = '', lemmas = {};
-        const activity = () => { clearTimeout(timeout); timeout = setTimeout(() => abort.abort(), 120000); }; activity();
+        let timeout, warning = '', lemmas = {}, baseline;
+        const activity = () => { clearTimeout(timeout); timeout = setTimeout(() => abort.abort(), 120000); };
         try {
+            const template = settings().injectionTemplate || '{{summary}}';
+            const selectionOptions = { storyNodes, nativeOverlap, targetTokens: settings().historyMaxTokens ?? 8000,
+                countTokens, format: text => template.replace('{{summary}}', () => text) };
+            // Reader chronology does not depend on retrieval or its network availability.
+            baseline = await selectHistory(nodes, [], selectionOptions);
+            if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
+            prepared = { key: snapshotKey, ...baseline }; injection.refresh();
+            activity();
             if (globalThis.RussianWIForms?.getStatus?.().enabled && globalThis.RussianWIForms?.getLemmas) {
                 try { lemmas = await globalThis.RussianWIForms.getLemmas([...new Set([query, ...nodes.flatMap(n => n.sources.map(s => s.text))].flatMap(terms))]); }
                 catch { warning = 'Russian word forms unavailable; original words remain searchable.'; }
@@ -87,18 +99,24 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             catch (error) { if (abort.signal.aborted) throw error; warning = `${error.message} Keyword search is active.`;
                 ranked = await search.search({ ...args, semantic: false }); }
             const diagnostics = ranked.diagnostics;
-            const template = settings().injectionTemplate || '{{summary}}';
-            const assembled = await selectHistory(nodes, ranked, { targetTokens: settings().historyMaxTokens ?? 8000,
-                countTokens, format: text => template.replace('{{summary}}', () => text) });
+            const assembled = await selectHistory(nodes, ranked, selectionOptions);
             if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
-                blocks: assembled.blocks, warning: assembled.warning, diagnostics };
+                blocks: assembled.blocks, baselineTokens: assembled.baselineTokens, spineInfo: assembled.spineInfo,
+                warning: assembled.warning, diagnostics };
             if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated ST tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, assembled.warning, warning].filter(Boolean).join(' ');
             injection.refresh();
         } catch (error) {
             if (run !== serial || ctx().chatMetadata !== metadata) return;
-            prepared = null; injection.clear();
-            if (output) output.textContent = abort.signal.aborted ? 'History preparation stopped. Saved archive is unchanged.' : error.message;
+            if (baseline && key(snapshot()) === snapshotKey) {
+                prepared = { key: snapshotKey, ...baseline,
+                    warning: [baseline.warning, `Retrieval unavailable: ${error.message}. Complete saved story baseline kept.`].filter(Boolean).join(' ') };
+                injection.refresh();
+                if (output) output.textContent = prepared.warning;
+            } else {
+                prepared = null; injection.clear();
+                if (output) output.textContent = error.message;
+            }
         } finally { clearTimeout(timeout); if (controller === abort) controller = null; }
     }
     const changed = () => { invalidate(); syncHints(false); };

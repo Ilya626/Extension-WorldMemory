@@ -560,6 +560,18 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         if (!controller?.signal.aborted) toastr.warning(error.message, 'World Memory');
     } finally { controller = null; busy = false; renderBusy(); await render(); }
 }
+async function backfillSpine() {
+    if (busy || !bridge() || bridge().isBusy()) return;
+    clearTimeout(timer);
+    try {
+        const result = await bridge().backfillStorySpine({ responseTokens: settings().responseTokens,
+            onProgress: p => status(`Preparing story skeleton ${p.saved + 1} / ${p.total} · ${p.sourceStatus === 'linked' ? 'original messages' : 'saved summary; originals unavailable'}`) });
+        status(result.total ? `Prepared ${result.saved} story section(s), ${result.summaryOnly} from saved summaries. L0 text was kept.`
+            : 'All eligible records already have a current story skeleton. Manual text and changed sources need your review.');
+    } catch (error) {
+        status(error.message); if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory');
+    } finally { history.changed(); renderBusy(); await render(); await renderArchive(); }
+}
 async function backfillMetadata() {
     if (busy) return;
     if (!bridge()?.backfillMemoryMetadata) { status('Archive runtime is not ready. Reload ST.'); return; }
@@ -590,7 +602,7 @@ function schedule() {
 }
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
-    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_summarize').prop('disabled', working);
+    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
@@ -604,7 +616,7 @@ async function renderArchive() {
     const snapshot = archiveRuntime.snapshot({ effective: false });
     const records = snapshot.packets, stale = records.filter(record => record.stale);
     const incomplete = record => record.annotationStatus === 'pending' || record.annotationStatus === 'partial' || Boolean(record.annotationError);
-    label.textContent = `${records.length} saved records · ${stale.length} changed source set(s) · ${records.filter(incomplete).length} need search notes / WI. Archive size is independent of the history request target.`;
+    label.textContent = `${records.length} saved records · ${stale.length} changed source set(s) · ${records.filter(r => !r.storySpine && !r.manual && !r.stale).length} need a compact story skeleton · ${records.filter(incomplete).length} need search notes / WI. Archive size is independent of the history request target.`;
     container.replaceChildren();
     const metadata = ctx().chatMetadata;
     for (const record of records.slice().reverse()) {
@@ -615,7 +627,7 @@ async function renderArchive() {
         const countSource = record.tokenCountSource || '';
         const countLabel = record.tokenCountOrigin === 'manual-tokenizer' || countSource.startsWith('estimated:') ? 'text estimate'
             : /^(?:usage\.|usageMetadata\.|eval_count$)/.test(countSource) ? 'API output tokens' : 'saved count; basis unknown';
-        title.textContent = `${at} · ${record.tokenCount ?? '?'} (${countLabel})${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
+        title.textContent = `${at} · ${record.tokenCount ?? '?'} (${countLabel})${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${record.storySpine ? ' · skeleton ready' : ' · full saved account'}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
         title.title = [countSource, Number.isFinite(record.responseTokenCount)
             ? `Original response: ${record.responseTokenCount} (${record.responseTokenCountSource || 'source unknown'}); may include hidden output.` : ''].filter(Boolean).join('\n');
         const text = document.createElement('textarea'); text.className = 'text_pole'; text.rows = 7; text.value = record.text;
@@ -638,6 +650,8 @@ async function renderArchive() {
             action('Refine', () => archiveRuntime.refine(record.id)),
             action('Rebuild search notes / WI', () => archiveRuntime.backfillMemoryMetadata({ packetId: record.id, force: true })),
             action('Delete', () => archiveRuntime.remove(record.id)));
+        if (!record.manual && !record.stale) actions.append(action(record.storySpine ? 'Rebuild story skeleton' : 'Prepare story skeleton',
+            () => archiveRuntime.backfillStorySpine({ packetId: record.id, force: true, responseTokens: settings().responseTokens })));
         panel.append(title);
         if (record.stale) {
             const warning = document.createElement('p'); warning.className = 'wm-muted';
@@ -648,6 +662,10 @@ async function renderArchive() {
             const warning = document.createElement('p'); warning.className = 'wm-muted';
             warning.textContent = `Saved L0 kept. ${record.annotationError} Use Rebuild search notes / WI to retry this step only.`;
             panel.append(warning);
+        }
+        if (record.storySpineError) {
+            const warning = document.createElement('p'); warning.className = 'wm-muted';
+            warning.textContent = `Saved L0 kept. ${record.storySpineError}`; panel.append(warning);
         }
         panel.append(text, sourceDetails, actions); container.append(panel);
     }
@@ -839,6 +857,7 @@ async function init() {
     $('#wm_update').on('click', () => { void update(true); });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
     $('#wm_backfill_metadata').on('click', () => { void backfillMetadata(); });
+    $('#wm_backfill_spine').on('click', () => { void backfillSpine(); });
     $('#wm_stop').on('click', () => { clearTimeout(timer); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy(); });
     $('#wm_summarize').on('click', () => { void archiveRuntime.summarizeNow().then(renderArchive).catch(error => status(error.message)).finally(renderBusy); });
     $('#wm_clear_embeddings').on('click', async () => {

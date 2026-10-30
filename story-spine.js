@@ -107,7 +107,7 @@ export function currentStorySpine(packet) {
 /** Every saved section has a position, including explicit unavailable/legacy/manual sections. */
 export function storySpineCells(packets) {
     const cells = [], hidden = new Set(packets.flatMap(p => (p.sources || []).filter(s => s.hidden).map(s => s.id)));
-    for (const packet of packets) {
+    for (const [packetPosition, packet] of packets.entries()) {
         const sources = packet.sources || [], sourceMap = new Map(sources.map(source => [source.id, source]));
         const sourceIds = packet.sourceIds || packet.sourceMessageIds || sources.map(source => source.id);
         const order = Number.isFinite(packet.order) ? packet.order : sources[0]?.index ?? Number.MAX_SAFE_INTEGER;
@@ -116,13 +116,13 @@ export function storySpineCells(packets) {
         if (spine) {
             for (const node of spine.nodes) {
                 if (node.sourceKind === 'saved-summary') {
-                    cells.push({ id: `${packet.id}:${node.id}`, packetId: packet.id, order,
+                    cells.push({ id: `${packet.id}:${node.id}`, packetId: packet.id, order, packetPosition,
                         start: node.summarySpans[0].start, text: node.text, sourceSpans: [], kind: 'compact-summary', expandable: false });
                     continue;
                 }
                 const excluded = node.sourceSpans.some(span => hidden.has(span.sourceId));
                 const first = node.sourceSpans[0];
-                cells.push({ id: `${packet.id}:${node.id}`, packetId: packet.id, order: sourceMap.get(first.sourceId).index,
+                cells.push({ id: `${packet.id}:${node.id}`, packetId: packet.id, packetPosition, order: sourceMap.get(first.sourceId).index,
                     start: first.start, text: excluded ? '[Section excluded by manual source visibility.]' : node.text,
                     sourceSpans: excluded ? [] : node.sourceSpans, kind: excluded ? 'excluded' : 'compact', expandable: !excluded });
             }
@@ -137,12 +137,12 @@ export function storySpineCells(packets) {
         const label = kind === 'manual' ? `User-edited memory${stale ? '; linked originals changed' : ''}` : kind === 'legacy'
             ? 'Saved account; compact story skeleton unavailable; backfill needed' : 'Story coverage gap';
         const complete = sourceIds.length && sourceIds.every(id => sourceMap.has(id));
-        cells.push({ id: `section:${packet.id}`, packetId: packet.id, order, start: 0,
+        cells.push({ id: `section:${packet.id}`, packetId: packet.id, order, packetPosition, start: 0,
             text: `[${label}]\n${text}`, kind, expandable: kind === 'legacy' && Boolean(complete),
             sourceSpans: kind === 'legacy' && complete ? sourceIds.map(id => {
                 const source = sourceMap.get(id);
                 return { sourceId: id, start: 0, end: source.text.length, offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) };
             }).filter(span => span.end > 0) : [] });
     }
-    return cells.sort((a, b) => a.order - b.order || a.start - b.start || a.id.localeCompare(b.id));
+    return cells.sort((a, b) => a.order - b.order || a.packetPosition - b.packetPosition || a.start - b.start || a.id.localeCompare(b.id));
 }
