@@ -613,7 +613,7 @@ async function renderArchive() {
         const linked = record.sources || [];
         const at = linked.length ? `messages ${linked[0].index}–${linked.at(-1).index}` : 'originals unavailable';
         const countSource = record.tokenCountSource || '';
-        const countLabel = record.tokenCountOrigin === 'manual-tokenizer' || countSource.startsWith('estimated:') ? 'ST text estimate'
+        const countLabel = record.tokenCountOrigin === 'manual-tokenizer' || countSource.startsWith('estimated:') ? 'text estimate'
             : /^(?:usage\.|usageMetadata\.|eval_count$)/.test(countSource) ? 'API output tokens' : 'saved count; basis unknown';
         title.textContent = `${at} · ${record.tokenCount ?? '?'} (${countLabel})${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
         title.title = [countSource, Number.isFinite(record.responseTokenCount)
