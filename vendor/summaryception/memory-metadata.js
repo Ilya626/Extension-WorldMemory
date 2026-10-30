@@ -96,7 +96,10 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     // knowledge tail never rejects ordinary navigation, WI or saved L0 prose.
     if (Object.hasOwn(data, 'epistemic')) result.epistemic = data.epistemic;
     if (Object.hasOwn(data, 'awareness')) result.awareness = data.awareness;
-    const validThread = typeof data.lprime?.text === 'string' && data.lprime.text.trim() && strings(data.lprime.keys);
+    // Some compatible model endpoints return the navigation prose directly.
+    // Preserve that text; absent search keys are an empty list, not invented facts.
+    const thread = typeof data.lprime === 'string' ? { text: data.lprime, keys: [] } : data.lprime;
+    const validThread = typeof thread?.text === 'string' && thread.text.trim() && strings(thread.keys);
     const validFacts = Array.isArray(data.facts);
     const validWI = data.wi && typeof data.wi === 'object' && !Array.isArray(data.wi) && Array.isArray(data.wi.updates);
     if (!validThread || !validFacts) result.warning = 'Some optional navigation metadata was incomplete; prose and other valid parts were kept.';
@@ -144,7 +147,7 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     }
     result.metadata = { version: 1, textRevision: backfill ? null : memoryTextRevision(prose),
         ...(extractiveFacts ? { factMode: 'verbatim-excerpts-v1' } : {}),
-        lprime: validThread ? { text: data.lprime.text.trim(), keys: [...new Set(data.lprime.keys)] } : null, facts,
+        lprime: validThread ? { text: thread.text.trim(), keys: [...new Set(thread.keys)] } : null, facts,
         ...(validWI ? { wi: data.wi } : {}) };
     return result;
 }

@@ -1,13 +1,13 @@
 # WorldMemory reference
 
-[Quick start](../README.md) · [Русский](REFERENCE_RU.md) · [Local embeddings](LOCAL_EMBEDDINGS.md)
+[Quick start](../README.md) · [Русский](REFERENCE_RU.md) · [0.5.0 validation](VALIDATION_0_5.md) · [Local embeddings](LOCAL_EMBEDDINGS.md)
 
 ## What is saved
 
 Each new packet follows two requests through the summarizer connection:
 
 1. **Stage 1:** generate L0 prose and its short chronological **L″ outline** from this packet's original messages and the **complete immediately preceding L0** (`previous full L0`), then save the new L0 durably. The predecessor supports continuity; its events must not be copied into the new packet. Code assigns outline source links and order. A malformed optional outline leaves the valid L0 saved. The growing archive retains individual packets rather than merging them into higher layers.
-2. **Stage 2:** annotate the saved L0 using the same original sources. Save a short **L′** navigation thread, exact source excerpts (`facts`) and optional WI updates. Code assigns source addresses and text spans. New WI evidence and excerpts must come from the packet's originals, not merely from the summary or prior references.
+2. **Stage 2:** annotate the saved L0 using the same original sources. Save a short **L′** navigation thread, exact source excerpts (`facts`), optional WI updates and, when enabled, optional **information events** in the same metadata response. Code assigns source addresses and text spans. New evidence must come from the packet's originals, not merely from the summary or prior references. There is no permanent third generation request.
 
 Active native WI can be supplied read-only to both stages under **Summarizer connection → Advanced summarizer context**. The managed UID/reference catalogue also includes inactive entries, so a record need not be activated in the current prompt to be found and updated as an existing subject. Existing references help identify subjects; they do not prove new events.
 
@@ -48,7 +48,7 @@ Before the next reply, the latest player post independently searches earlier sou
 
 **Max history tokens (soft target)** shares its default 8,000 tokens between the full outline, its labels and retrieved originals. Whole retained fragments or the outline itself can exceed it with a warning; it is not a truncation limit on saved L0. **Raw tail** independently retains recent messages. **Advanced history insertion** controls history position, role, depth, wrapper and whether native WI may scan it. Setting history insertion to Off disables this history prompt, including the outline. WI has its own insertion controls.
 
-**Full RP prompt target (tokens)** defaults to 24,000 for the complete input: system/card, WI, history, raw tail and current post. It is a size reference, not a hard cap enforced on ST's complete request. Check the prompt-size display and actual assembled prompt.
+**Full RP prompt target (tokens)** defaults to 24,000 for the complete input: system/card, WI, history, raw tail and current post, plus optional information-event context when enabled and delivered. It is a size reference, not a hard cap enforced on ST's complete request. The default [24k example](../README.md#prompt-fill-bar-defaults-and-controls) excludes the disabled information-event addition. Enabling it adds to the total native ST context; its 12,000-character cap is not a token budget or reserved allowance. Check the prompt-size display and actual assembled prompt.
 
 The optional **Let replies add hidden search hints** setting adds a short service block to the regular RP response, without another generation request. Hints belong to the selected swipe and are search suggestions, not world facts. The reader uses a hint only to rank its unchanged original; hint text is never inserted as history. Missing hints never reject the reply.
 
@@ -85,6 +85,33 @@ Use **Characters** / **Other records and sources** to inspect records. **Keep ma
 **Apply saved WI** retries local application without a model request. **Update legacy WI** explicitly runs the older model-based extraction path and can incur additional requests. Source deletion or revision retracts affected automatic evidence; retained contributions and manual records are preserved. An inactive UID still exists and can be referenced for maintenance; absence from the current prompt does not mean deletion.
 
 Editing an archived source keeps its L0 marked **SOURCES CHANGED**. Sources without another current L0 are unhidden if they were hidden automatically; affected automatic WI contributions are removed locally, including when automatic WI writing is off. Manual visibility and WI edits are kept. Regenerate the affected L0 to refresh its saved memory.
+
+## Optional information events and local graph
+
+**World Info · entity reference → Track NPC information events (experimental)** defaults to off (`knowledgeBoundaries: false`). **Include related source evidence (local graph, experimental)** is separate and also off (`awarenessGraph: false`); it needs event tracking enabled. These additions leave the growing archive, full L″ and ordinary retrieval unchanged.
+
+The existing stage-2 response can return an `awareness` array containing `observed` (direct perception) or `reported` (receipt of a statement) events. Each event names eligible managed character references, one precise topic, an exact original quotation and one source handle; a report may identify its established speaker. Code binds it to a unique original range/revision and a persisted character instance. Source edits, hidden/unavailable originals, changed L0 and deleted/reused character identities can invalidate it. Unresolved recipients are omitted. An empty array is valid; missing or unsupported output preserves saved L0 and valid search/WI data.
+
+A report does not establish truth or belief. Absence does not establish ignorance. Later original dialogue can establish discovery. The GM retains the whole story and secrets. Exact source binding establishes provenance, not semantic correctness. Previously stored experimental `epistemic` rows remain readable as legacy data; new preparation requests the simpler events.
+
+### Prepare an existing archive
+
+1. Configure ordinary **Prepare and apply WI after saving L0** and enable event tracking. Event preparation needs the packet's original sources and character identities already managed at the start of the request; author WI is not guessed into that catalogue.
+2. If managed character profiles are missing, first prepare/apply ordinary search notes / WI for the relevant archive. A request that creates a profile cannot also use it as a pre-existing event identity.
+3. Explicitly run **Rebuild search notes / WI** on the relevant packets after profiles exist. **Prepare missing search notes / WI** is suitable for pending packets; a completed annotation may require **Rebuild**. Each selected packet can incur a stage-2 summarizer request, preserving L0. **Apply saved WI** only applies saved results locally and does not generate events.
+4. Use **Chat Completion** for RP and let native WI select the profiles. Inspect the assembled prompt or `WorldMemory.inspectKnowledge()`; enable the local graph separately to compare related evidence.
+
+There is no automatic two-pass cold-archive onboarding guarantee. Ordinary newly ready packets still use two sequential background generation requests; additional explicit preparation of older packets is separate.
+
+### Selection, context size and delivery
+
+The new GM addition uses the **final native WI activation set**, after keyword/Constant selection, groups, probability and budget. Native WI regex/depth rules and parameter rendering apply. Only eligible selected managed profiles establish focus; loaded candidate entries alone do not. Evidence is a separate non-scannable extension prompt, leaving original/manual WI text and saved keys intact. ST counts this addition with the other parts of the input.
+
+The local graph links events through actors, original messages and exactly matching topics, optionally adding related source evidence. Acquaintance and shared links never establish knowledge transfer. It needs no graph database, extra embedding model or LLM request per RP turn. Its general RP benefit has not been established.
+
+The addition is capped at **12,000 characters**, preserving whole event rows. If the graph view exceeds the cap, it falls back to direct events and prefers recent whole rows in source order. No token allowance is promised. The cap does not shorten the saved archive or L″.
+
+The final **Chat Completion** hook checks rendered profile text and actual addition presence after prompt assembly. If a selected profile is absent, the optional addition is withheld. `WorldMemory.inspectKnowledge()` exposes preparation, selection and delivery diagnostics. This is a rendered-text check, not a native UID trace through every third-party transformation. Other API modes retain the journal without this new injection. A narrow native run verified preparation, persistence and delivery; all WI filtering modes, conventional authorization settings, physical-phone behavior and general RP quality remain outside that acceptance. [Technical boundaries](KNOWLEDGE_BOUNDARIES.md) · [0.5.0 measured scope](VALIDATION_0_5.md).
 
 ## Backups and preview limits
 

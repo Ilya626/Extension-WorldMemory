@@ -5,7 +5,7 @@ import { installHistory } from './history-runtime.js';
 import { createArchive, importLegacyArchive } from './archive-store.js';
 import { installArchiveRuntime } from './archive-runtime.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
-import { createKnowledgeRuntime, ensureKnowledgeInstances } from './knowledge-runtime.js';
+import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
 import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
@@ -52,6 +52,7 @@ function state() {
     if (value.chatId !== ctx().chatId) {
         // A branch or renamed chat gets an independent book; no cross-chat write-through.
         value.cloneFrom = value.book || value.cloneFrom;
+        value.cloneOwner = value.book ? value.owner : value.cloneOwner;
         value.book = null; value.owner = crypto.randomUUID(); value.chatId = ctx().chatId;
     }
     return value;
@@ -108,10 +109,20 @@ async function getBook(create = false) {
     if (!memory) throw new Error('Open a character chat first.');
     if (!memory.book && !create) return null;
     if (!memory.book) {
+        const metadata = ctx().chatMetadata, chat = ctx().chat, owner = memory.owner;
+        const check = () => {
+            if (ctx().chatMetadata !== metadata || ctx().chat !== chat || state() !== memory || memory.owner !== owner)
+                throw new Error('Chat changed while copying the memory book.');
+        };
         const name = `WorldMemory_${memory.owner}`;
         await nativeWI.createNewWorldInfo(name, { interactive: false });
+        check();
         let data = memory.cloneFrom ? await nativeWI.loadWorldInfo(memory.cloneFrom) : null;
+        check();
         data = data ? structuredClone(data) : { entries: {} };
+        const oldBook = memory.cloneFrom, oldData = structuredClone(data);
+        const owners = [...new Set(Object.values(data.entries || {}).map(entry => entryMeta(entry)?.owner).filter(Boolean))];
+        const oldOwner = memory.cloneOwner || (owners.length === 1 ? owners[0] : null);
         if (memory.cloneFrom) {
             for (const [id, entry] of Object.entries(data.entries || {})) {
                 if (entryMeta(entry)) entryMeta(entry).owner = memory.owner;
@@ -119,6 +130,18 @@ async function getBook(create = false) {
         }
         memory.book = name; delete memory.cloneFrom;
         await nativeWI.saveWorldInfo(name, data, true);
+        check();
+        if (oldBook && oldOwner) {
+            rebindKnowledgeIdentities(memory.archive,
+                { book: oldData, world: oldBook, owner: oldOwner }, { book: data, world: name, owner: memory.owner });
+            for (const record of Object.values(memory.archive?.records || {})) {
+                const stamp = record.memoryMetadata?.wiContext;
+                if (stamp?.owner === oldOwner && stamp.book === oldBook) {
+                    stamp.owner = memory.owner; stamp.book = name;
+                }
+            }
+        }
+        delete memory.cloneOwner;
         await saveState();
     }
     const bookName = memory.book;
@@ -193,7 +216,9 @@ function syncMainNames(book) {
 }
 async function injectBook(payload) {
     const memory = state();
-    if (!settings().enabled || !memory?.book) return;
+    if (!settings().enabled || !memory) return;
+    if (!memory.book && memory.cloneFrom) await getBook(true);
+    if (state() !== memory || !memory.book) return;
     const metadata = ctx().chatMetadata, world = memory.book;
     const scope = nativeReferenceScope;
     if (scope && !scope.signal?.aborted && scope.metadata === ctx().chatMetadata) {
@@ -740,6 +765,7 @@ async function render() {
     document.getElementById('wm_embedding_mode').value = s.historyEmbeddingMode === 'local' ? 'local' : 'api';
     document.getElementById('wm_embedding_mode').disabled = !(s.historySemantic || s.wiSemantic);
     document.getElementById('wm_spine_rerank').disabled = !s.historySemantic;
+    document.getElementById('wm_awareness_graph').disabled = !s.knowledgeBoundaries;
     document.getElementById('wm_summarizer_wi_percent').disabled = !s.summarizerWorldInfo;
     const api = s.historyEmbeddingAPI || {}, local = s.historyEmbeddingLocal || {};
     for (const [id, key, fallback] of [['wm_embedding_url', 'url', ''], ['wm_embedding_key', 'key', ''],
@@ -954,6 +980,10 @@ async function init() {
                 // the receiving book: a failed save still leaves the old pair recoverable.
                 next.book = `WorldMemory_${owner}_import_${crypto.randomUUID()}`;
                 delete next.cloneFrom;
+                delete next.cloneOwner;
+                if (data.state?.book && data.state?.owner) rebindKnowledgeIdentities(next.archive,
+                    { book: data.book, world: data.state.book, owner: data.state.owner },
+                    { book, world: next.book, owner });
                 if (!foreign && data.state?.archive) for (const record of Object.values(next.archive.records)) {
                     const stamp = record.memoryMetadata?.wiContext;
                     if (stamp?.owner === data.state.owner && stamp.book === data.state.book) {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31 — optional NPC information events
+
+- Add optional source-bound `observed` / `reported` events to the existing second-stage search-metadata / WI response. Keep the growing L0 archive, complete L″, normal retrieval and two-call background packet flow unchanged.
+- Add separate GM evidence for eligible managed character profiles selected by native WI, with native regex/depth handling and a final rendered-profile presence check. The new injection requires Chat Completion; other API modes keep stored events without injecting them.
+- Add an optional local graph of actors, original messages and exactly matching topics. It adds related evidence with no extra LLM calls or embedding model. **Event tracking and the graph both default to off.**
+- Keep whole evidence rows within a 12,000-character cap, falling back from an oversized graph to direct events. This is part of ST's total context, not a token allowance. Default 24k prompt examples exclude the disabled addition.
+- Preserve original/manual WI and previously stored experimental epistemic rows as legacy. Old archives require explicit second-stage preparation; archives without managed character profiles need WI profiles first, then explicit event preparation. Automatic two-pass onboarding is not claimed.
+- Preserve managed character identity bindings when importing a portable backup or creating a chat branch. A native export → import → branch → reload round trip retained all 3 information events and 7 L0 packets/outlines without model requests.
+- Accept navigation prose returned as a plain `lprime` string with an empty keyword list. Preserve its text and keep exact-source excerpt and WI validation unchanged, avoiding a needless partial result for this format variation.
+- Verify the native automatic background queue on an imported 228-message, 52-packet archive: two new packets were saved before their annotation calls. A separate metadata-only retry confirmed recovery of the plain-string navigation format without regenerating L0. [Scope and limits](docs/VALIDATION_0_5.md#automatic-background-queue-and-native-backend).
+- Document the mixed 18-post comparison and narrow native preparation/reload/delivery acceptance. No overall RP benefit, universal model quality, physical-phone or full authorization-mode qualification is claimed. [Measured scope](docs/VALIDATION_0_5.md).
+
 ## 0.4.0 — 2026-10-30 — complete story outline preview
 
 - Keep the entire available chronological L″ in the history prompt. Independently retrieved original windows follow their matching outline steps; selection never replaces those steps.

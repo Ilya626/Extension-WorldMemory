@@ -54,6 +54,43 @@ export function buildKnowledgeContext({ book, world, owner } = {}) {
         } };
 }
 
+/** An explicit book copy preserves character instances but changes their scope.
+ * Rebind only identities that resolve in BOTH books; stale/deleted instances
+ * remain stored and ineligible rather than being adopted by a matching UID.
+ */
+export function rebindKnowledgeIdentities(archive, from, to) {
+    const previous = buildKnowledgeContext(from), next = buildKnowledgeContext(to);
+    const move = actor => {
+        if (!actor?.character) return null;
+        const old = previous.resolveCharacter(actor.who, null, actor.character);
+        if (!old) return null;
+        const target = next.resolveCharacter(`c${old.uid}`);
+        const oldEntry = Object.values(from.book?.entries || {}).find(entry => entry.uid === old.uid);
+        const newEntry = Object.values(to.book?.entries || {}).find(entry => entry.uid === old.uid);
+        if (!target || entryMeta(oldEntry)?.knowledgeInstance !== entryMeta(newEntry)?.knowledgeInstance) return null;
+        return { ...actor, who: `c${target.uid}`, character: target };
+    };
+    const result = { rebound: 0, unresolved: 0 };
+    for (const record of Object.values(archive?.records || {})) {
+        const metadata = record.memoryMetadata;
+        if (!metadata) continue;
+        for (const kind of ['awareness', 'epistemic']) {
+            if (!Array.isArray(metadata[kind])) continue;
+            metadata[kind] = metadata[kind].map(row => {
+                const actors = kind === 'epistemic' ? [row] : [...(row.actors || []), ...(row.from ? [row.from] : [])];
+                const moved = actors.map(move);
+                if (!actors.length || moved.some(actor => !actor)) {
+                    metadata[`${kind}Prepared`] = false; result.unresolved++; return row;
+                }
+                result.rebound++;
+                return kind === 'epistemic' ? moved[0] : { ...row,
+                    actors: moved.slice(0, row.actors.length), ...(row.from ? { from: moved.at(-1) } : {}) };
+            });
+        }
+    }
+    return result;
+}
+
 /** settings(): {enabled, knowledgeBoundaries?}; world()/owner() identify the
  * current managed book. snapshot() supplies current archiveSnapshot packets.
  * context() may be used for stage2 even with automatic WI generation switched off.

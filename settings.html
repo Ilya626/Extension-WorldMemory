@@ -121,7 +121,7 @@
         <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. Generated WI uses a separate chat-scoped lorebook and native activation rules and budget. Original lorebooks stay intact.</p>
         <label class="checkbox_label"><input id="wm_auto" data-setting="auto" type="checkbox"><span>Prepare and apply WI after saving L0</span></label>
         <label class="checkbox_label"><input id="wm_knowledge_boundaries" data-setting="knowledgeBoundaries" type="checkbox"><span>Track NPC information events (experimental)</span></label>
-        <label class="checkbox_label"><input data-setting="awarenessGraph" type="checkbox"><span>Include related source evidence (local graph, experimental)</span></label>
+        <label class="checkbox_label"><input id="wm_awareness_graph" data-setting="awarenessGraph" type="checkbox"><span>Include related source evidence (local graph, experimental)</span></label>
         <small class="wm-muted">Uses the existing second preparation request after L0 is saved. Source-linked events enter separate GM context for the managed profiles selected by native WI. Currently requires Chat Completion; other API modes keep the saved events without injecting them. Existing packets need an explicit search-notes rebuild. No extra generation request per RP turn.</small>
         <label class="checkbox_label"><input id="wm_main_constant" data-setting="alwaysMain" type="checkbox"><span>Include main profiles without keyword triggers</span></label>
         <small class="wm-muted">Uses ST's Constant setting. Disabled entries, groups and ST's token budget still apply. Other entries use normal keyword activation.</small>
