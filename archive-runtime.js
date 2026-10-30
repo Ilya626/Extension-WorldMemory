@@ -187,7 +187,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const system = [s.summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
             'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
             STORY_SPINE_INSTRUCTION].join('\n\n');
-        const story = localSources.map(source => `[${source.handle}] ${source.name}: ${source.text}`).join('\n\n');
+        const story = localSources.map(source => `[${source.handle}] (message ${source.message}) ${source.name}: ${source.text}`).join('\n\n');
         const template = s.summarizerUserPrompt || DEFAULT_USER;
         let prompt = template.replaceAll('{{player_name}}', () => ctx().name1 || 'User')
             .replaceAll('{{context_str}}', () => previous?.text || '(first L0; no previous memory)')
@@ -390,7 +390,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                     'BACKFILL OUTPUT OVERRIDE: return ONLY the <story_spine> block. Do not output or rewrite L0 prose. The saved L0 is immutable. Cover every supplied handle once, in order. If these are saved-summary parts, preserve their uncertainty and do not invent original chat evidence.'].join('\n\n');
                 const response = await transport(owner, system, JSON.stringify({ task: 'Build the missing story skeleton only.',
                     saved_summary: record.text, source_status: linked ? 'linked' : 'summary-only',
-                    sources: cells.map(cell => ({ handle: cell.handle, name: cell.name, text: cell.text })) }), options);
+                    sources: cells.map(cell => ({ handle: cell.handle, message: cell.message, name: cell.name, text: cell.text })) }), options);
                 guard(owner); if (linked) checkSources(owner, sources);
                 if (JSON.stringify(readPacket(owner.archive, packet.id)) !== before) throw new Error('Saved L0 changed during skeleton preparation. Response not applied.');
                 const parsed = readStorySpine(response.text, cells, { backfill: true, savedText: record.text });

@@ -3,13 +3,13 @@ import { hash } from './history.js';
 
 export const STORY_SPINE_INSTRUCTION = `After the complete L0 prose append exactly one <story_spine> JSON block:
 {"nodes":[{"text":"a short chronological step with its necessary condition or unresolved result","src":["s1"]}]}
-Return one node for EVERY supplied source handle, in the supplied order, with exactly that one handle in src. The handles address bounded consecutive parts of original messages; they are not separate events by themselves. Each text should normally be one short sentence of about 15–30 words, readable as part of a continuous story; retain a necessary condition even if it needs a little more space. Preserve who spoke, planned, knew or claimed something, and distinguish proposals and prerequisites from completed results. Out-of-character directions and unplayed scenario material remain such; do not turn them into played events. If a part merely continues the scene without a material change, say so briefly rather than inventing a change. Do not return IDs, positions, offsets, versions or new facts. Keep the complete L0 prose before this block; no prose after it.`;
+Cover EVERY supplied handle exactly once in order. A node may group 1–4 consecutive handles from the SAME message (the supplied message marker identifies it), for example src:["s1","s2"]. Never group different messages. Handles are technical text parts, not separate events; combine adjoining parts when they form one meaningful chronological step. Write a short sentence or phrase with no minimum word count; retain the condition or unresolved result needed to understand the step. Avoid repeating an unchanged state for each technical part. Preserve who spoke, planned, knew or claimed something, and distinguish proposals and prerequisites from completed results. Out-of-character directions and unplayed scenario material remain such; do not turn them into played events. If a part merely continues the scene without a material change, say so briefly rather than inventing a change. Do not return IDs, positions, offsets, versions or new facts. Keep the complete L0 prose before this block; no prose after it.`;
 
 /** Freeze bounded source addresses at annotation time, independently of later tokenizer changes. */
 export function storySpineSources(sources, options = {}) {
     const { summaryOnly = false, maxCharacters = 1600 } = typeof options === 'number' ? { maxCharacters: options } : options;
     const output = [], limit = Math.max(256, Math.floor(Number(maxCharacters) || 1600));
-    for (const source of sources || []) {
+    for (const [sourceIndex, source] of (sources || []).entries()) {
         if (typeof source.text !== 'string' || !source.text.trim()) continue;
         const ends = [...source.text.matchAll(/[.!?…]+[»”"'’)\]]*(?:\s+|$)|\n+/gu)].map(m => m.index + m[0].length);
         const sourceRevision = hash(source.text);
@@ -24,7 +24,7 @@ export function storySpineSources(sources, options = {}) {
                     if (/[\uD800-\uDBFF]/u.test(source.text[end - 1])) end--;
                 }
             }
-            output.push({ handle: `s${output.length + 1}`, id: source.id, name: source.name || '', text: source.text.slice(start, end),
+            output.push({ handle: `s${output.length + 1}`, message: `m${sourceIndex + 1}`, id: source.id, name: source.name || '', text: source.text.slice(start, end),
                 ...(summaryOnly ? { sourceKind: 'saved-summary', sourceSpans: [], summarySpans: [{ recordId: source.id,
                     textRevision: sourceRevision, start, end, offsetUnit: 'utf16', endExclusive: true }] }
                     : { sourceSpans: [{ sourceId: source.id, start, end, offsetUnit: 'utf16', endExclusive: true, sourceRevision }] }) });
@@ -45,19 +45,37 @@ export function readStorySpine(value, sources, { backfill = false, savedText = '
         if (start >= 0 && !match) throw new Error('Incomplete story_spine tail.');
         if (start < 0 && !(backfill && response.trimStart().startsWith('{'))) throw new Error('Story skeleton was not returned.');
         data = JSON.parse(match ? match[1] : response);
-        if (!Array.isArray(data?.nodes) || !data.nodes.length || data.nodes.length !== sources.length)
+        if (!Array.isArray(data?.nodes) || !data.nodes.length || data.nodes.length > sources.length)
             throw new Error('Story skeleton must cover every supplied source handle.');
-        const nodes = data.nodes.map((node, index) => {
-            const source = sources[index];
+        const merge = parts => {
+            if (!parts.length) return [];
+            const span = { ...parts[0] };
+            for (const part of parts.slice(1)) {
+                if (part.sourceId !== span.sourceId || part.recordId !== span.recordId
+                    || part.sourceRevision !== span.sourceRevision || part.textRevision !== span.textRevision || part.start !== span.end)
+                    throw new Error('Grouped story handles must address consecutive parts of one source.');
+                span.end = part.end;
+            }
+            return [span];
+        };
+        let cursor = 0;
+        const nodes = data.nodes.map(node => {
             if (typeof node?.text !== 'string' || !node.text.trim() || !Array.isArray(node.src)
-                || node.src.length !== 1 || node.src[0] !== source.handle || !(source.sourceSpans?.length || source.summarySpans?.length))
+                || node.src.length < 1 || node.src.length > 4
+                || node.src.some((handle, offset) => handle !== sources[cursor + offset]?.handle))
                 throw new Error('Story skeleton has invalid or out-of-order source handles.');
-            const sourceSpans = (source.sourceSpans || []).map(span => ({ ...span }));
-            const summarySpans = (source.summarySpans || []).map(span => ({ ...span }));
+            const group = sources.slice(cursor, cursor + node.src.length), source = group[0];
+            if (group.some(part => part.id !== source.id || part.sourceKind !== source.sourceKind
+                || !(part.sourceSpans?.length || part.summarySpans?.length)))
+                throw new Error('A story node cannot group different messages.');
+            cursor += group.length;
+            const sourceSpans = merge(group.flatMap(part => part.sourceSpans || []));
+            const summarySpans = merge(group.flatMap(part => part.summarySpans || []));
             return { id: `spine:${hash(JSON.stringify([sourceSpans, summarySpans]))}`, text: node.text.trim(),
                 sourceIds: [...new Set(sourceSpans.map(span => span.sourceId))], sourceSpans,
                 ...(summarySpans.length ? { sourceKind: 'saved-summary', summarySpans } : {}) };
         });
+        if (cursor !== sources.length) throw new Error('Story skeleton must cover every supplied source handle.');
         result.storySpine = { version: 1, textRevision: hash(backfill ? savedText : text), nodes };
     } catch (error) { result.warning = error.message || 'Invalid optional story skeleton; L0 was kept.'; }
     return result;

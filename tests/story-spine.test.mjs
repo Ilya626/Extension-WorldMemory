@@ -73,6 +73,24 @@ test('a partial raw hit expands its bounded cell in place and retains other cell
     assert.deepEqual(raw.sourceSpans, [chosen]);
     assert.ok(raw.text.includes(handles[middle].text));
     assert.equal(result.blocks.length, handles.length);
+    // Adjoining technical parts may share a step; a partial hit restores that
+    // whole merged range, while the following compact steps stay in place.
+    const grouped = [handles.slice(0, 2), ...handles.slice(2).map(handle => [handle])];
+    p.storySpine = readStorySpine(`${p.text}\n<story_spine>${JSON.stringify({ nodes: grouped.map((parts, i) => ({
+        text: `Grouped step ${i}.`, src: parts.map(part => part.handle) })) })}</story_spine>`, handles).storySpine;
+    assert.equal(currentStorySpine(p), p.storySpine);
+    const mergedSpan = { ...handles[0].sourceSpans[0], end: handles[1].sourceSpans[0].end };
+    const expanded = await selectHistory(archiveHistoryNodes({ packets: [p] }),
+        [hit(p, original, handles[1].sourceSpans[0].start + 2, handles[1].sourceSpans[0].start + 8)],
+        { targetTokens: 8000, countTokens });
+    assert.deepEqual(expanded.blocks.find(b => b.kind === 'raw').sourceSpans, [mergedSpan]);
+    assert.ok(expanded.text.includes(original.text.slice(mergedSpan.start, mergedSpan.end)));
+    assert.ok(expanded.text.includes('Grouped step 1.'));
+    assert.ok(!expanded.text.includes('Grouped step 0.'));
+    const differentMessages = storySpineSources([source('x', 1, 'A condition.'), source('y', 2, 'A later answer.')]);
+    const invalid = readStorySpine(`${p.text}\n<story_spine>{"nodes":[{"text":"Mixed messages","src":["s1","s2"]}]}</story_spine>`, differentMessages);
+    assert.equal(invalid.storySpine, null);
+    assert.equal(invalid.text, p.text);
 });
 
 test('legacy and manual accounts remain whole; summary-only skeleton never becomes original evidence', async () => {
