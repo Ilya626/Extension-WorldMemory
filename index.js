@@ -5,12 +5,13 @@ import { installHistory } from './history-runtime.js';
 import { createArchive, importLegacyArchive } from './archive-store.js';
 import { installArchiveRuntime } from './archive-runtime.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
+import { createKnowledgeRuntime, ensureKnowledgeInstances } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
 import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 
-const defaults = { enabled: true, auto: true, alwaysMain: true, language: 'auto', targetTokens: 160,
+const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
     history: true, hints: true, historySemantic: true, historySpineRerank: false, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
     historyMaxTokens: 8000, promptTargetTokens: 24000, retainedContextTokens: 8000, batchContextTokens: 24000, blindZoneExchanges: 1,
@@ -20,7 +21,7 @@ const defaults = { enabled: true, auto: true, alwaysMain: true, language: 'auto'
     summaryLanguage: 'en', summaryCustomLanguage: '', summarizerWorldInfo: true, summarizerWorldInfoPercent: 20,
     injectionPosition: 0, injectionDepth: 1, injectionRole: 0, injectionScan: false, injectionTemplate: '[Earlier history]\n{{summary}}' };
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
-let history, archiveRuntime, semanticWI;
+let history, archiveRuntime, semanticWI, knowledgeRuntime;
 let nativeReferenceScope = null;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
@@ -120,9 +121,17 @@ async function getBook(create = false) {
         await nativeWI.saveWorldInfo(name, data, true);
         await saveState();
     }
-    const data = await nativeWI.loadWorldInfo(memory.book);
+    const bookName = memory.book;
+    const data = await nativeWI.loadWorldInfo(bookName);
     if (!data) throw new Error(`World Memory book is missing: ${memory.book}. Import its backup or choose a new chat.`);
-    return structuredClone(data);
+    const book = structuredClone(data);
+    if (settings().knowledgeBoundaries && ensureKnowledgeInstances(book, memory.owner)) {
+        const name = bookName;
+        if (state() !== memory || memory.book !== name) throw new Error('Chat changed while preparing character identities.');
+        await nativeWI.saveWorldInfo(name, book, true);
+        if (state() !== memory || memory.book !== name) throw new Error('WI book changed while preparing character identities.');
+    }
+    return book;
 }
 async function saveBook(book, metadata, baseBook = null) {
     const context = ctx(), memory = state(), name = memory?.book, owner = memory?.owner;
@@ -167,7 +176,8 @@ function initializeEntry(book, name, type = 'lore', main = false) {
         position: settings().position, depth: settings().depth, role: 0, order: main ? 220 : 180,
         probability: 100, useProbability: true, excludeRecursion: true, preventRecursion: true });
     entry.extensions ??= {};
-    entry.extensions[OWNER] = { owner: state().owner, type, main, contributions: {}, manual: false };
+    entry.extensions[OWNER] = { owner: state().owner, type, main, contributions: {}, manual: false,
+        ...(type === 'character' ? { knowledgeInstance: crypto.randomUUID() } : {}) };
     markGenerated(entry);
     return entry;
 }
@@ -792,11 +802,14 @@ async function init() {
     if (await claimArchiveRuntime()) return;
     archiveRuntime = installArchiveRuntime({ ctx,
         settings: () => ({ ...settings(), archiveAuto: !busy && settings().archiveAuto !== false }), getArchive, saveArchive, status,
-        prepareReferences: prepareSummaryContext, refreshInjection: () => history?.refresh(), onBusyChange: renderBusy,
+        prepareReferences: prepareSummaryContext, prepareKnowledge: options => knowledgeRuntime?.context(options),
+        refreshInjection: () => history?.refresh(), onBusyChange: renderBusy,
         afterSave: async () => { history?.changed(); await update(false); await renderArchive(); } });
     history = installHistory({ ctx, settings, state, saveState, status, bridge });
     semanticWI = createSemanticWIRuntime({ ctx, settings, embeddings: history.embeddings,
         sourceQueries: getSummaryWorldInfoSources, sourceSignal: getSummaryWorldInfoSignal, onUpdate: renderWIStatus });
+    knowledgeRuntime = createKnowledgeRuntime({ ctx, settings, snapshot: () => archiveRuntime.snapshot(),
+        getBook: () => getBook(), world: () => state()?.book, owner: () => state()?.owner });
     const prepareContext = async (...args) => {
         const results = await Promise.allSettled([history.prepare(...args), semanticWI.prepare(...args)]);
         for (const result of results) if (result.status === 'rejected') {
@@ -999,6 +1012,7 @@ async function init() {
         archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow,
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),
         prepareHistory: prepareContext, inspectHistory: () => history.inspect(), inspectSemanticWI: () => semanticWI.inspect(),
+        inspectKnowledge: () => knowledgeRuntime.inspect(),
         getStatus: () => ({ busy, book: state()?.book || null, enabled: settings().enabled,
             history: Boolean(settings().enabled && settings().injectionPosition !== -1),
             summaryWI: Boolean(settings().enabled && settings().auto),

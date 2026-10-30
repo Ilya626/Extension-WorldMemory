@@ -92,6 +92,9 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         result.warning = 'Optional memory metadata was not an object; prose was kept.'; return result;
     }
+    // Leave semantic/identity validation to the optional knowledge module. A bad
+    // knowledge tail never rejects ordinary navigation, WI or saved L0 prose.
+    if (Object.hasOwn(data, 'epistemic')) result.epistemic = data.epistemic;
     const validThread = typeof data.lprime?.text === 'string' && data.lprime.text.trim() && strings(data.lprime.keys);
     const validFacts = Array.isArray(data.facts);
     const validWI = data.wi && typeof data.wi === 'object' && !Array.isArray(data.wi) && Array.isArray(data.wi.updates);

@@ -8,6 +8,7 @@ import { stripReasoningBlocks, requireModelOutput, getModelOutputIssue } from '.
 import { metadataSources, readMemoryMetadata, memoryTextRevision, MEMORY_METADATA_INSTRUCTION } from './vendor/summaryception/memory-metadata.js';
 import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget } from './vendor/summaryception/world-info-context.js';
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
+import { KNOWLEDGE_BOUNDARIES_INSTRUCTION, readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 
 const CONTINUITY = `The previous_l0 (or prior_context) is the COMPLETE immediately preceding saved L0, supplied as continuity context and a style example. Continue its narrative thread with the new source packet. Preserve necessary referents and unresolved conditions without recopying the whole previous summary. For the first packet there is no previous L0.
 Only new_sources (or passage_in_question) are witnesses for this packet's new events, search excerpts and WI contributions. previous_l0 is a saved account, not an additional source handle or independent proof. Do not turn its claims into newly observed events. Preserve thoughts versus speech, plans versus outcomes, attribution, identity and limiting conditions. Do not continue the roleplay.`;
@@ -16,10 +17,13 @@ WI answers what is useful to know about one identifiable person, place, object o
 Prioritize conditions that determine whether the next planned action is viable. Keep its required place, trigger, hazard and prerequisite with the action. Preserve stated quantities together with their original units, ranges and qualifiers; do not convert or reinterpret measurements. Do not merge separately stated relationships into a new causal chain. Who knows, claims or infers a fact is part of it; preserve that boundary in both narrative and profiles.`;
 const DEFAULT_SYSTEM = 'You summarize roleplay for continuity. Preserve the concrete facts needed to continue correctly in compact coherent prose. Output the complete memory, not commentary.';
 const DEFAULT_USER = '<player_name>\n{{player_name}}\n</player_name>\n\n<previous_l0>\n{{context_str}}\n</previous_l0>\n\n<new_sources>\n{{story_txt}}\n</new_sources>\n\nWrite the next complete L0 for these new sources.';
+// The private API harness imports the same instructions instead of tuning a
+// second summarizer prompt that production never uses.
+export { CONTINUITY, MEMORY_ROLES, DEFAULT_SYSTEM, DEFAULT_USER };
 const unique = values => [...new Set(values)];
 
 export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, status = () => {},
-    afterSave, prepareReferences, refreshInjection: onRefreshInjection, onBusyChange = () => {},
+    afterSave, prepareReferences, prepareKnowledge, refreshInjection: onRefreshInjection, onBusyChange = () => {},
     sendRequest = sendSummarizerRequest } = {}) {
     let job = null, timer = null, generationActive = false, historyProvider = null;
     let nativeIsGenerating = null;
@@ -240,12 +244,19 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const savedFingerprint = snapshot({ effective: false }).packets.find(packet => packet.id === record.id)?.sourceFingerprints || {};
         try {
             const wi = await references(owner, sources, record.text, record.id);
+            let knowledge = null;
+            if (config().knowledgeBoundaries && sources.length && prepareKnowledge) try {
+                knowledge = await wait(Promise.resolve(prepareKnowledge({ before: Math.min(...sources.map(source => source.index)) })), owner); guard(owner);
+            } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Saved L0 and ordinary metadata are kept.`); }
             const system = [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wi?.systemPrompt,
+                knowledge?.knowledge_characters?.length ? KNOWLEDGE_BOUNDARIES_INSTRUCTION : null,
                 'This is stage 2. The saved L0 prose is immutable and is a draft navigation aid, not independent proof. Return ONLY one <memory_metadata> JSON block, with no L0 prose. Search excerpts and this packet\'s WI contributions must be supported by the supplied new_sources, not by the saved L0 or retained prior references. With no original sources use saved_summary only for Lprime, return facts: [], and omit WI claims.'].filter(Boolean).join('\n\n');
             const prompt = JSON.stringify({ task: 'Annotate this already saved L0. Do not regenerate or rewrite its prose.',
                 saved_summary: record.text, source_status: sources.length ? 'linked' : 'summary-only',
                 new_sources: localSources.map(source => ({ handle: source.handle, name: source.name, text: source.text })),
-                ...(wi?.context ? { world_memory_context: wi.context } : {}) });
+                ...(wi?.context ? { world_memory_context: wi.context } : {}),
+                ...(knowledge?.knowledge_characters?.length ? { knowledge_context: {
+                    knowledge_characters: knowledge.knowledge_characters, known_topics: knowledge.known_topics || [] } } : {}) });
             status('Stage 2: preparing search metadata and WI for saved L0.');
             const response = await transport(owner, system, prompt, options);
             guard(owner); if (sources.length) checkSources(owner, sources);
@@ -253,18 +264,26 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const parsed = readMemoryMetadata(response.text, localSources, { backfill: true, extractiveFacts: true });
             if (!parsed.metadata) throw new Error(parsed.warning || 'No usable metadata returned. L0 is saved; retry metadata backfill only.');
             if (parsed.warning) warn(parsed.warning);
+            const boundaries = knowledge ? readKnowledgeBoundaries({ epistemic: parsed.epistemic }, localSources,
+                { resolveCharacter: knowledge.resolveCharacter, packetId: record.id }) : { epistemic: null, warnings: [] };
+            const previousKnowledge = record.memoryMetadata?.epistemic || [];
             const metadata = { ...parsed.metadata, textRevision: memoryTextRevision(record.text),
+                epistemic: mergeKnowledgeBoundaries(previousKnowledge, boundaries.epistemic),
+                epistemicWarnings: boundaries.warnings,
+                epistemicPrepared: Boolean(knowledge?.knowledge_characters?.length && Array.isArray(parsed.epistemic)
+                    && (parsed.epistemic.length === 0 || boundaries.epistemic?.length) && !boundaries.warnings.length),
                 sourceFingerprints: sources.length ? fingerprints(owner, sources) : savedFingerprint,
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
                 ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
             if (!sources.length) delete metadata.wi;
+            if (boundaries.warnings.length) warn(boundaries.warnings.join(' '));
             const complete = !parsed.warning && Boolean(metadata.lprime?.text && (!wi || metadata.wi));
             putPacket(owner.archive, { ...record, memoryMetadata: metadata, annotationStatus: complete ? 'complete' : 'partial',
                 annotationError: parsed.warning || (complete ? null : 'Some optional metadata is missing; retry stage 2 only.'),
                 annotationUsage: response.usage || null, annotationTokenCount: response.tokenCount ?? null });
             await persist(owner, 'metadata-only', record.id);
             const packet = readPacket(owner.archive, record.id);
-            return { packet, warning: parsed.warning || packet.annotationError };
+            return { packet, warning: [parsed.warning || packet.annotationError, ...boundaries.warnings].filter(Boolean).join(' ') || null };
         } catch (error) {
             // Stage 1 is already durable. Mark a retryable annotation without overwriting later edits.
             if (!owner.controller.signal.aborted && ctx().chatMetadata === owner.metadata && getArchive() === owner.archive
@@ -299,7 +318,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         guard(owner); await protectBlindZone(owner); await persist(owner, 'source-context', record.id);
         try {
             const detail = await annotate(owner, readPacket(owner.archive, record.id), sources);
-            status(detail.warning ? 'L0 saved; some search notes / WI are incomplete. Rebuild search notes to retry this step only.'
+            status(detail.warning ? 'L0 saved; some search notes, WI or knowledge hints need review. Rebuild search notes to retry this step only.'
                 : 'L0 saved; search metadata and WI stage finished.');
         } catch (error) {
             guard(owner); warn(`L0 is saved; annotation remains pending: ${error.message}. Retry metadata backfill, not L0 generation.`);
@@ -349,10 +368,17 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     }
     async function backfillMemoryMetadata(options = {}) {
         return run(async owner => {
+            let hasKnowledgeCharacters = false;
+            if (config().knowledgeBoundaries && prepareKnowledge) try {
+                const catalogue = await wait(Promise.resolve(prepareKnowledge()), owner); guard(owner);
+                hasKnowledgeCharacters = Boolean(catalogue?.knowledge_characters?.length);
+            } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Ordinary metadata remains available.`); }
             const selected = options.packetIds || (options.packetId ? [options.packetId] : null);
             const pending = snapshot({ effective: false }).packets.filter(packet =>
                 (!selected || selected.includes(packet.id)) && (options.force || packet.annotationStatus === 'pending'
                 || packet.annotationStatus === 'partial' || packet.annotationError || !packet.memoryMetadata?.lprime?.text
+                || (hasKnowledgeCharacters && !packet.stale && packet.sourceStatus === 'linked'
+                    && !packet.memoryMetadata?.epistemicPrepared)
                 || packet.memoryMetadata.factMode !== 'verbatim-excerpts-v1'
                 || (packet.memoryMetadata.sourceStatus === 'summary-only' && !packet.stale && packet.sourceStatus === 'linked')
                 || (options.includeWI !== false && config().auto !== false && prepareReferences && !packet.stale
