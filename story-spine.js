@@ -130,10 +130,11 @@ export function storySpineCells(packets) {
         }
         const excluded = !manual && sourceIds.some(id => hidden.has(id));
         const stale = Boolean(packet.stale);
-        const kind = stale ? 'stale' : excluded ? 'excluded' : manual ? 'manual' : 'legacy';
-        const text = stale ? '[Story section unavailable: original sources changed; rebuild saved memory.]'
+        const kind = manual ? 'manual' : stale ? 'stale' : excluded ? 'excluded' : 'legacy';
+        const text = manual ? packet.detail ?? packet.text ?? ''
+            : stale ? '[Story section unavailable: original sources changed; rebuild saved memory.]'
             : excluded ? '[Section excluded by manual source visibility.]' : packet.detail ?? packet.text ?? '';
-        const label = kind === 'manual' ? 'User-edited memory' : kind === 'legacy'
+        const label = kind === 'manual' ? `User-edited memory${stale ? '; linked originals changed' : ''}` : kind === 'legacy'
             ? 'Saved account; compact story skeleton unavailable; backfill needed' : 'Story coverage gap';
         const complete = sourceIds.length && sourceIds.every(id => sourceMap.has(id));
         cells.push({ id: `section:${packet.id}`, packetId: packet.id, order, start: 0,
