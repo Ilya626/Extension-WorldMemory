@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 — 2026-10-30
+
+- Recover a search excerpt when the model added an outer `*`: accept only a uniquely located original substring in the cited message, retaining its original text and offsets. Source handles, spelling and internal text are not corrected. Saved L0 and WI are unchanged.
+
 ## 0.3.1 — 2026-10-30
 
 - Preserve disabled history when migrating from the pre-standalone extension: translate it to the current **Off — do not send history** control, without overwriting an existing insertion choice. Off also stops requesting hidden search hints. Missing settings still receive the new defaults.

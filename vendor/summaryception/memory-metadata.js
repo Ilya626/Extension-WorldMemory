@@ -23,6 +23,21 @@ export const metadataSources = sources => sources.map((source, index) => ({
 // No whitespace, word, quote, minus-sign or general Unicode normalization.
 const normalizeExcerptDashes = text => text.replace(/[\u2013\u2014]/g, '-');
 
+// A model may balance emphasis at the edge of a copied passage. Remove at
+// most one boundary asterisk per side, only for a unique original substring.
+function recoverBoundaryAsterisks(text, source) {
+    const candidates = [];
+    if (text.startsWith('*')) candidates.push(text.slice(1));
+    if (text.endsWith('*')) candidates.push(text.slice(0, -1));
+    if (text.startsWith('*') && text.endsWith('*')) candidates.push(text.slice(1, -1));
+    const matches = [...new Set(candidates)].filter(Boolean).map(text => {
+        const normalized = normalizeExcerptDashes(text), offset = source.indexOf(normalized);
+        return offset >= 0 && source.lastIndexOf(normalized) === offset ? { text, offset } : null;
+    }).filter(Boolean).sort((a, b) => b.text.length - a.text.length);
+    // Prefer retaining real source markup; competing longest matches are ambiguous.
+    return matches.length && matches.filter(match => match.text.length === matches[0].text.length).length === 1 ? matches[0] : null;
+}
+
 function parseMetadataObject(text) {
     try { return JSON.parse(text); }
     catch (error) {
@@ -100,8 +115,13 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
             }
             let offset = source.text.indexOf(text);
             if (offset < 0) {
-                const normalizedSource = normalizeExcerptDashes(source.text), normalizedText = normalizeExcerptDashes(text);
+                const normalizedSource = normalizeExcerptDashes(source.text);
+                let normalizedText = normalizeExcerptDashes(text);
                 offset = normalizedSource.indexOf(normalizedText);
+                if (offset < 0) {
+                    const recovered = recoverBoundaryAsterisks(text, normalizedSource);
+                    if (recovered) { text = recovered.text; offset = recovered.offset; normalizedText = normalizeExcerptDashes(text); }
+                }
                 if (offset < 0) {
                     result.warning = 'Some optional search excerpts were not exact source text and were ignored.'; continue;
                 }
