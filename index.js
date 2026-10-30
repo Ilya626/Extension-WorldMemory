@@ -612,7 +612,12 @@ async function renderArchive() {
         const title = document.createElement('summary');
         const linked = record.sources || [];
         const at = linked.length ? `messages ${linked[0].index}–${linked.at(-1).index}` : 'originals unavailable';
-        title.textContent = `${at} · ${record.tokenCount ?? '?'} tokens${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
+        const countSource = record.tokenCountSource || '';
+        const countLabel = record.tokenCountOrigin === 'manual-tokenizer' || countSource.startsWith('estimated:') ? 'ST text estimate'
+            : /^(?:usage\.|usageMetadata\.|eval_count$)/.test(countSource) ? 'API output tokens' : 'saved count; basis unknown';
+        title.textContent = `${at} · ${record.tokenCount ?? '?'} (${countLabel})${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
+        title.title = [countSource, Number.isFinite(record.responseTokenCount)
+            ? `Original response: ${record.responseTokenCount} (${record.responseTokenCountSource || 'source unknown'}); may include hidden output.` : ''].filter(Boolean).join('\n');
         const text = document.createElement('textarea'); text.className = 'text_pole'; text.rows = 7; text.value = record.text;
         text.setAttribute('aria-label', `Saved memory ${record.id}`);
         const sourceDetails = document.createElement('details'), sourceTitle = document.createElement('summary'), sourceText = document.createElement('pre');

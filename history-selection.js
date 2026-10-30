@@ -48,7 +48,7 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
     const hidden = new Set(nodes.flatMap(node => (node.sources || []).filter(source => source.hidden).map(source => source.id)));
     const sources = new Map(nodes.filter(node => !node.hidden && !node.stale).flatMap(node => node.sources || [])
         .filter(source => !hidden.has(source.id)).map(source => [source.id, source]));
-    const prefix = 'Earlier history. Original excerpts preserve what was written, including plans, claims and private thoughts; they do not establish shared knowledge. Later events and the current chat supersede earlier state.\n';
+    const prefix = 'Earlier history, selected sources in chronological order. These quotations may include plans, claims, private thoughts and out-of-character scenario notes; they do not establish shared knowledge or turn unplayed material into events. […] marks omitted source text. Later events and the current chat supersede earlier state.\n';
     function render(selected) {
         const bySource = new Map(), summaries = new Map(), blocks = [];
         for (const doc of selected) {
@@ -63,9 +63,13 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
         }
         for (const [id, ranges] of bySource) {
             const source = sources.get(id);
-            for (const range of merge(ranges)) blocks.push({ order: source.index, start: range.start,
-                text: `[Original message ${source.index}; ${source.name || 'Narrator'}]\n${source.text.slice(range.start, range.end)}`,
-                sourceSpans: [{ sourceId: id, ...range, offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) }] });
+            const spans = merge(ranges), complete = spans.length === 1 && spans[0].start === 0 && spans[0].end === source.text.length;
+            const role = source.sourceKind === 'worldbook' ? 'imported worldbook' : source.isUser ? 'player post' : 'narrator post';
+            const excerpts = spans.map(range => source.text.slice(range.start, range.end)).join('\n[…]\n');
+            const text = `${spans[0].start ? '[…]\n' : ''}${excerpts}${spans.at(-1).end < source.text.length ? '\n[…]' : ''}`;
+            blocks.push({ order: source.index, start: spans[0].start,
+                text: `[Original message ${source.index}; ${source.name || 'Narrator'}; ${role}; ${complete ? 'complete source' : 'selected excerpts'}]\n${text}`,
+                sourceSpans: spans.map(range => ({ sourceId: id, ...range, offsetUnit: 'utf16', endExclusive: true, sourceRevision: hash(source.text) })) });
         }
         // Lprime is navigation for retrieval. Prompt evidence comes from the
         // selected originals and explicitly labelled manual/legacy memories.

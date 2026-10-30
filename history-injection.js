@@ -108,20 +108,23 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize }
         if (!format) return;
         const current = context(), metadata = current.chatMetadata, chat = current.chat;
         const text = format === 'chat' ? JSON.stringify(prompt) : prompt;
-        let tokens, estimator = 'characters/4';
-        if (typeof current.getTokenCountAsync === 'function') {
-            try {
-                const count = await current.getTokenCountAsync(text, 0);
-                if (Number.isFinite(count) && (count > 0 || !text.length)) {
-                    tokens = count;
-                    estimator = 'ST tokenizer';
-                }
-            } catch { /* Informational measurement must not stop generation. */ }
-        }
+        let tokens, estimator = format === 'chat' ? 'serialized chat characters/4 fallback' : 'characters/4 fallback';
+        try {
+            // Use the same message framing as native CC. Counting a serialized
+            // messages array as one text prompt adds a second JSON wrapper.
+            const count = format === 'chat'
+                ? await (await import('/scripts/tokenizers.js')).countTokensOpenAIAsync(prompt)
+                : await current.getTokenCountAsync?.(text, 0);
+            if (Number.isFinite(count) && (count > 0 || !text.length)) {
+                tokens = count;
+                estimator = format === 'chat' ? 'native ST chat counter; may use fallback' : 'ST text counter; may use fallback';
+            }
+        } catch { /* Informational measurement must not stop generation. */ }
+        const serializedChat = format === 'chat' && tokens === undefined;
         tokens ??= Math.ceil(text.length / 4);
         if (context().chat !== chat || context().chatMetadata !== metadata) return;
         await onPromptSize({ tokens, estimated: true, estimator, format,
-            scope: 'assembled-input', serializedChat: format === 'chat',
+            scope: 'assembled-input', serializedChat,
             excludes: ['response tokens', 'provider-side prompt changes', 'native multimodal token accounting'] });
     }
 
@@ -129,8 +132,8 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize }
     eventSource.on(events.CHAT_COMPLETION_PROMPT_READY, placeMemoryBeforeChat);
     eventSource.on(events.GENERATE_BEFORE_COMBINE_PROMPTS, placeTextMemoryBeforeChat);
     if (onPromptSize) {
-        // Observe the combined CC/TC request without delaying it or enforcing a
-        // budget. JSON tokenization for CC is explicitly an estimate of input.
+        // Observe native CC/TC framing without delaying generation or enforcing
+        // a budget. Native counters can fall back; this is not provider usage.
         const observe = (data, dryRun) => { void measurePrompt(data, dryRun).catch(() => {}); };
         eventSource.on(events.GENERATE_AFTER_DATA, observe);
     }

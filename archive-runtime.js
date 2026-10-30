@@ -210,15 +210,19 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const detail = { ...response, text, annotationStatus: 'pending', annotationError: null,
             memoryMetadata: { version: 1, textRevision: memoryTextRevision(text), lprime: null, facts: [],
                 sourceFingerprints: fingerprints(owner, sources), sourceStatus: 'linked', producer: 'worldmemory-archive-prose-v1' } };
-        if (text !== response.text) {
+        if (Number.isFinite(detail.tokenCount)) {
             detail.responseTokenCount = detail.tokenCount; detail.responseTokenCountSource = detail.tokenCountSource;
-            delete detail.tokenCount; delete detail.tokenCountSource;
         }
-        if (!Number.isFinite(detail.tokenCount)) {
-            const count = ctx().getTokenCountAsync;
-            detail.tokenCount = Math.max(1, Number(typeof count === 'function' ? await count(text, 0) : Math.ceil(text.length / 4)) || 1);
-            detail.tokenCountSource = typeof count === 'function' ? 'estimated: ST tokenizer' : 'estimated: characters / 4';
-        }
+        const count = ctx().getTokenCountAsync;
+        detail.tokenCount = Math.max(1, Math.ceil(text.length / 4));
+        detail.tokenCountSource = 'estimated: characters / 4';
+        if (typeof count === 'function') try {
+            const estimate = await count(text, 0);
+            if (Number.isFinite(estimate) && estimate > 0) {
+                detail.tokenCount = estimate;
+                detail.tokenCountSource = 'estimated: ST text counter; may use fallback';
+            }
+        } catch { /* A display estimate must not discard completed L0 prose. */ }
         guard(owner); return detail;
     }
     // Stage 2 shares its caller's writer/controller; it never re-enters public backfill.
@@ -367,7 +371,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (value === record.text) return record;
             const tokenCount = await wait(owner.context.getTokenCountAsync(value, 0), owner);
             guard(owner);
-            putPacket(owner.archive, { ...record, text: value, tokenCount, manual: true,
+            putPacket(owner.archive, { ...record, text: value, tokenCount, tokenCountSource: 'estimated: ST text counter; may use fallback', manual: true,
                 tokenCountOrigin: 'manual-tokenizer', memoryMetadata: null, annotationStatus: 'pending', annotationError: null });
             await persist(owner, 'edited', id);
             status('Text saved. Source links are unchanged; prepare search metadata when ready.');

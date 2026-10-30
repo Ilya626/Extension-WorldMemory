@@ -31,7 +31,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         return current && prepared.key === key(current) ? prepared.text || '' : ''; };
     const injection = installHistoryInjection({ ctx, settings, getText, onPromptSize: info => {
         const output = document.getElementById('wm_prompt_size');
-        if (output) output.textContent = `Full prompt: ${info.tokens ?? info.tokenCount ?? '?'} tokens (ST tokenizer estimate). Target: ${settings().promptTargetTokens || 24000}.`;
+        if (output) output.textContent = `Full prompt estimate: ${info.tokens ?? info.tokenCount ?? '?'} tokens (${info.estimator}). Target: ${settings().promptTargetTokens || 24000}. Provider usage may differ.`;
     } });
     function invalidate() { serial++; controller?.abort(); prepared = null; injection.clear(); }
     function syncHints(enabled = false) {
@@ -93,7 +93,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
                 blocks: assembled.blocks, warning: assembled.warning, diagnostics };
-            if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, assembled.warning, warning].filter(Boolean).join(' ');
+            if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated ST tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, assembled.warning, warning].filter(Boolean).join(' ');
             injection.refresh();
         } catch (error) {
             if (run !== serial || ctx().chatMetadata !== metadata) return;
