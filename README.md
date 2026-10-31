@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.2 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.3 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 ## Start with the recommended setup
 
@@ -222,6 +222,8 @@ For an existing Summaryception setup, WorldMemory imports the saved archive and 
 Import **that one PNG** on a device with WorldMemory0.5.2+ and open the character. A fresh empty chat automatically resumes the embedded conversation, memory and WI. Existing nonempty chats are preserved; restored lore goes into a separate native book. Full game cards need no separate chat or backup-file import. **Save memory to card / Read memory from card** and standalone JSON backups remain available as manual memory tools; older snapshots without embedded `chat` restore memory only. Transfer makes no model requests.
 
 ## Preview limits
+
+**Empty chat after importing a game card?** Reload the ST page after updating through the extension manager, then reopen the imported character. The WorldMemory panel header shows the loaded runtime version: it should be **0.5.3** or newer. The installed version in the manager alone does not show what the open page is running. The panel shows embedded messages/L0 and current messages. **Restore game from card** saves the current chat and opens the whole embedded game as a separate chat. **Read memory from card** imports memory only. Transfer the original PNG as a file, not as a compressed photo.
 
 ### Tested setup
 

@@ -1,9 +1,14 @@
 <div class="world-memory-settings">
   <div class="inline-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header"><b>WorldMemory</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+    <div class="inline-drawer-toggle inline-drawer-header"><b id="wm_runtime_version">WorldMemory</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
     <div class="inline-drawer-content">
       <p class="wm-muted">Keep the whole story in view: a complete outline with relevant original passages, plus recent chat.</p>
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
+      <section id="wm_card_resume_panel" hidden>
+        <div id="wm_card_resume_status" class="wm-muted" role="status" aria-live="polite"></div>
+        <button id="wm_card_resume" class="menu_button" type="button">Restore game from card · Восстановить игру из карточки</button>
+        <small class="wm-muted">Откроет встроенный чат вместе с памятью и WI как отдельный чат. Текущий чат сохранится. После обновления аддона перезагрузите страницу ST.</small>
+      </section>
       <section class="wm-recommended wm-context" aria-labelledby="wm_context_heading">
         <h4 id="wm_context_heading">Context budget · Бюджет контекста</h4>
         <div class="wm-field wm-context-target"><label for="wm_prompt_target">Desired context (tokens) · Желаемый контекст</label><input id="wm_prompt_target" data-setting="promptTargetTokens" class="text_pole" type="number" min="1" step="1000" aria-describedby="wm_context_help"></div>

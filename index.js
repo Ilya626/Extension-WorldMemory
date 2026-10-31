@@ -29,6 +29,7 @@ let nativeWI, controller = null, busy = false, timer = null, currentUpdate = nul
 let history, archiveRuntime, semanticWI, knowledgeRuntime;
 let nativeReferenceScope = null;
 let restoringCardGame = false, cardExportPass = null;
+let cardRestoreTimer = null;
 let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nativePromptSize = null, wiSize = null, wiMeasurementSerial = 0;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
@@ -651,7 +652,7 @@ function schedule() {
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
     $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
-    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_apply_recommended, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
+    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
 function button(text, callback) {
@@ -795,6 +796,15 @@ function renderHistoryPlacement(s = settings()) {
 }
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
+    document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
+    const character = ctx().characters[ctx().characterId];
+    const embedded = character?.data?.extensions?.worldMemoryBackup;
+    const embeddedGame = embedded?.chat;
+    document.getElementById('wm_card_resume_panel').hidden = !character || Boolean(ctx().groupId);
+    document.getElementById('wm_card_resume_status').textContent = embedded?.format === 'world-memory-v1'
+        && embeddedGame?.format === 'world-memory-chat-v1' && Array.isArray(embeddedGame.messages)
+        ? `В карточке: ${embeddedGame.messages.length} сообщений · память: ${Object.keys(embedded.state?.archive?.records || {}).length} L0. В открытом чате: ${ctx().chat.length} сообщений.`
+        : 'В этой карточке нет встроенного чата WorldMemory. Нужен исходный PNG-файл с полной игрой.';
     scheduleContextStatistics();
     const integration = globalThis.RussianWIForms?.getStatus?.();
     document.getElementById('wm_integration').textContent = `Archive: ${bridge()?.version || 'loading'} · Russian WI: ${integration ? integration.enabled ? integration.ready ? 'ready' : 'loading dictionary' : 'disabled' : 'not loaded (optional)'}`;
@@ -1070,23 +1080,74 @@ async function importBackup(input) {
 }
 
 async function restoreEmbeddedCardGame() {
-    if (restoringCardGame || busy || archiveRuntime.isBusy() || !settings().enabled || ctx().groupId || !state()) return false;
+    return restoreCardGame(false);
+}
+function cardRestoreError(error) {
+    console.error('[WorldMemory] Embedded game restore failed.', error);
+    status(error.message);
+    const note = document.getElementById('wm_card_resume_status');
+    if (note) note.textContent = error.message;
+    toastr.warning(error.message, 'World Memory · card restore');
+}
+async function restoreCardGame(explicit = false) {
+    if (restoringCardGame || !settings().enabled || ctx().groupId || !state()) {
+        if (explicit) throw new Error('Enable WorldMemory and open an individual character chat first.');
+        return false;
+    }
     const context = ctx(), character = context.characters[context.characterId];
-    const backup = character?.data?.extensions?.worldMemoryBackup, game = backup?.chat;
+    let backup = character?.data?.extensions?.worldMemoryBackup;
+    if (explicit) {
+        const card = await readCharacterCard(character.avatar);
+        if (ctx().chatMetadata !== context.chatMetadata || ctx().characters[ctx().characterId]?.avatar !== character.avatar)
+            throw new Error('Chat changed. No embedded game was imported.');
+        backup = card.data?.extensions?.worldMemoryBackup;
+    }
+    const game = backup?.chat;
     const fresh = context.chat.length === 0 || (context.chat.length === 1 && !context.chat[0].is_user
         && context.chat[0].mes === character.first_mes);
-    if (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport) return false;
+    if (!explicit && (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport)) return false;
     if (backup?.format !== 'world-memory-v1' || game?.format !== 'world-memory-chat-v1'
-        || !Array.isArray(game.messages) || !game.messages.length) return false;
+        || !Array.isArray(game.messages) || !game.messages.length) {
+        if (explicit) throw new Error('This card has no embedded game chat. Import the original PNG as a file, not a compressed photo.');
+        return false;
+    }
+    if (busy || archiveRuntime.isBusy()) {
+        if (explicit) throw new Error('Wait for the current memory operation to finish, then restore the card game.');
+        clearTimeout(cardRestoreTimer);
+        const metadata = context.chatMetadata, avatar = character.avatar;
+        cardRestoreTimer = setTimeout(() => {
+            if (ctx().chatMetadata === metadata && ctx().characters[ctx().characterId]?.avatar === avatar)
+                void restoreEmbeddedCardGame().catch(cardRestoreError);
+        }, 300);
+        return false;
+    }
     if (game.messages.some(message => !message || typeof message !== 'object' || typeof message.mes !== 'string'))
         throw new Error('The card contains an invalid chat. The existing chat was kept.');
     restoringCardGame = true; busy = true; renderBusy(); clearTimeout(timer);
     const avatar = character.avatar, initialMetadata = context.chatMetadata;
+    let savedCurrentChat = null;
     const check = () => {
         if (ctx().characters[ctx().characterId]?.avatar !== avatar || ctx().groupId)
             throw new Error('Character changed while restoring the embedded game.');
     };
     try {
+        if (explicit) {
+            if (document.querySelector('#chat .edit_textarea'))
+                throw new Error('Finish or cancel the open message edit before restoring another chat.');
+            const before = JSON.stringify({ messages: context.chat, metadata: initialMetadata });
+            await context.saveChat(); check();
+            if (ctx().chatMetadata !== initialMetadata || ctx().chatId !== context.chatId)
+                throw new Error('Chat changed before saving. The embedded game was not opened.');
+            const saved = await fetch('/api/chats/get', { method: 'POST', headers: context.getRequestHeaders(),
+                body: JSON.stringify({ ch_name: character.name, avatar_url: avatar, file_name: context.chatId }) });
+            if (!saved.ok) throw new Error('Could not verify the current chat save. The current chat was kept open.');
+            const rows = await saved.json(); check();
+            if (ctx().chatMetadata !== initialMetadata || ctx().chatId !== context.chatId
+                || before !== JSON.stringify({ messages: context.chat, metadata: initialMetadata })
+                || !Array.isArray(rows) || before !== JSON.stringify({ messages: rows.slice(1), metadata: rows[0]?.chat_metadata }))
+                throw new Error('The current chat save could not be verified. The current chat was kept open.');
+            savedCurrentChat = before;
+        }
         const metadata = structuredClone(game.metadata || {}); delete metadata[OWNER];
         // Import author lore to a new native chat book only when its original link is unavailable.
         // Existing books are never overwritten by an imported image.
@@ -1114,6 +1175,9 @@ async function restoreEmbeddedCardGame() {
         const result = await response.json(); check();
         if (!result.res || result.fileNames?.length !== 1) throw new Error('ST could not import the embedded chat.');
         if (ctx().chatMetadata !== initialMetadata) throw new Error('Chat changed. The imported game remains in this character\'s chat list.');
+        if (explicit && (document.querySelector('#chat .edit_textarea')
+            || savedCurrentChat !== JSON.stringify({ messages: context.chat, metadata: initialMetadata })))
+            throw new Error('Current chat changed during import and was kept open. The imported game is in this character\'s chat list.');
         const importedChatId = result.fileNames[0].replace(/\.jsonl$/, '');
         await ctx().openCharacterChat(importedChatId); check();
         if (ctx().chatId !== importedChatId || ctx().chatMetadata.worldMemoryCardImport?.resumeId !== resumeId)
@@ -1255,6 +1319,7 @@ async function init() {
     });
     $('#wm_card_save').on('click', () => { void saveMemoryToCard().catch(error => { status(error.message); toastr.warning(error.message, 'World Memory'); }); });
     $('#wm_card_load').on('click', () => { void loadMemoryFromCard().catch(error => { status(error.message); toastr.warning(error.message, 'World Memory'); }); });
+    $('#wm_card_resume').on('click', () => { void restoreCardGame(true).catch(cardRestoreError); });
     $('#wm_import').on('click', () => document.getElementById('wm_import_file').click());
     $('#wm_import_file').on('change', async event => {
         const file = event.target.files[0];
@@ -1277,11 +1342,12 @@ async function init() {
     ctx().eventSource.on('worldmemory:prompt-size', info => { nativePromptSize = { metadata: ctx().chatMetadata, info }; scheduleContextStatistics(); });
     ctx().eventSource.on('worldmemory:archive-changed', event => { if (event.metadata === ctx().chatMetadata) { history.changed(); schedule(); scheduleContextStatistics(); } });
     ctx().eventSource.on(events.CHAT_CHANGED, async () => {
+        clearTimeout(cardRestoreTimer);
         clearTimeout(timer); controller?.abort(); getArchive();
         try {
             if (await restoreEmbeddedCardGame()) return;
             await claimArchiveRuntime(); await Promise.all([render(), renderArchive()]);
-        } catch (error) { status(error.message); }
+        } catch (error) { cardRestoreError(error); }
     });
     for (const event of [events.MESSAGE_EDITED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED].filter(Boolean)) ctx().eventSource.on(event, () => {
         clearTimeout(timer); controller?.abort(new Error('Chat sources changed.'));
@@ -1291,8 +1357,9 @@ async function init() {
     ctx().eventSource.on(events.WORLDINFO_UPDATED, () => { if (!busy) void render().catch(error => status(error.message)); });
     await render(); await renderArchive();
     if (freshProfile) applyNativeWIBudget();
-    try { await restoreEmbeddedCardGame(); } catch (error) { status(error.message); }
-    status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
+    try {
+        if (!await restoreEmbeddedCardGame()) status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
+    } catch (error) { cardRestoreError(error); }
     globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
         archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow,
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),

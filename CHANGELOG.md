@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 — 2026-10-31 — visible card-game recovery
+
+- Show the loaded runtime version in the panel header. Reload ST and reopen the character after updating files through the extension manager.
+- Show embedded message/packet counts and the open chat's message count. **Restore game from card** imports the whole embedded game into a separate chat after saving and verifying the current chat; an open message editor must be finished first. **Read memory from card** remains memory-only.
+- Retry automatic restoration after a memory operation finishes while the same empty chat and character remain selected. Show restoration errors as notifications and console errors; do not replace an initialization error with Ready.
+- Native UI checks reproduced an old in-page runtime opening an empty chat despite updated files. Reload/reopen restored the game; explicit recovery opened another chat. No model requests were made. Physical-phone qualification remains deferred.
+
 ## 0.5.2 — 2026-10-31 — one-image games and explicit context controls
 
 - Native ST PNG/JSON export now saves the selected chat, source-linked archive, full available outline and managed WI in the card. Importing such a card resumes its embedded game in a fresh empty chat; existing chats stay intact. Missing author lore is restored into a separate native chat book without overwriting existing books.
