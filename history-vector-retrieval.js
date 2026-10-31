@@ -258,16 +258,13 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
         const recentFallback = rankings.every(list => !list.length);
         if (recentFallback) rankings[0] = docs.map(doc => ({ doc, score: 0 })).sort((a, b) =>
             b.doc.order - a.doc.order || (b.doc.start ?? 0) - (a.doc.start ?? 0));
-        // Interleave numbered intents; ordinary prose uses a single query.
-        for (let rank = 0; rank < docs.length; rank++) for (let part = 0; part < rankings.length; part++) {
-            const hit = rankings[part][rank]; if (!hit) continue;
-            const { doc, score } = hit;
+        const append = (target, doc, score, queryPart) => {
             if (doc.kind === 'memory') {
-                if (seen.has(doc.id)) continue;
+                if (seen.has(doc.id)) return;
                 seen.add(doc.id);
                 const { id, kind, manual, order, text, search, sourceIds } = doc;
-                output.push({ id, kind, manual, order, text, search, sourceIds, score, queryPart: part + 1 });
-                continue;
+                target.push({ id, kind, manual, order, text, search, sourceIds, score, queryPart });
+                return;
             }
             const ranges = [{ start: doc.windowStart, end: doc.windowEnd }];
             const source = doc.entry.source;
@@ -275,10 +272,20 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
                 const end = source.text.indexOf('\n'); if (end > 0) ranges.push({ start: 0, end });
             }
             const result = rawDocument(doc.entry, ranges);
-            if (seen.has(result.id)) continue;
-            seen.add(result.id); output.push({ ...result, score, queryPart: part + 1,
+            if (seen.has(result.id)) return;
+            seen.add(result.id); target.push({ ...result, score, queryPart,
                 centerSpans: [{ sourceId: source.id, start: doc.start, end: doc.end, offsetUnit: 'utf16', endExclusive: true, sourceRevision: doc.entry.revision }] });
+        };
+        // Interleave numbered intents; ordinary prose uses a single query.
+        for (let rank = 0; rank < docs.length; rank++) for (let part = 0; part < rankings.length; part++) {
+            const hit = rankings[part][rank];
+            if (hit) append(output, hit.doc, hit.score, part + 1);
         }
+        // Only the final assembled-request fill uses these remaining originals.
+        // Keep normal retrieval order and relevance selection unchanged.
+        output.fillCandidates = [];
+        for (const doc of docs.slice().sort((a, b) => b.order - a.order || (b.start ?? 0) - (a.start ?? 0)))
+            append(output.fillCandidates, doc, 0, 0);
         check();
         output.diagnostics = { profileId, contentRevision: HISTORY_VECTOR_CONTENT_REVISION, sources: sources.size, rawCenters,
             indexedFacts: facts.length, ignoredUnaddressedOrStaleFacts: ignoredFacts, queryParts: parts.length, semantic, recentFallback,

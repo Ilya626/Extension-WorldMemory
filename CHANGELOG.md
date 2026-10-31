@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8 — 2026-11-01 — history fill after retrieval failures
+
+- Keep local keyword retrieval and final history fill available after an embedding inactivity timeout. Cancelling generation or changing sources still stops the work.
+- During final fill, use remaining eligible original windows after the ranked matches are exhausted. Normal retrieval ranking, complete story outline, raw tail, WI and manual allocations remain intact. No extra embedding/model requests.
+- Show why final history fill stopped in the context panel, including an unavailable retrieval or changed history block.
+
 ## 0.5.7 — 2026-11-01 — portable card bindings
 
 - Export embedded games without installation-local avatar, lorebook, chat-integrity or previous-import bindings. Keep the chat, archive, author lore and original PNG raster intact.

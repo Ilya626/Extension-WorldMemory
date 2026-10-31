@@ -57,6 +57,7 @@ test('global chronology includes unqueried story sections in source order', asyn
         await preparing;
         assert.ok(runtime.inspect().text.includes('A decision remains pending.'));
         assert.match(runtime.inspect().warning, /baseline kept/u);
+        assert.equal(runtime.inspect().diagnostics.semantic, false);
     } finally {
         t.mock.timers.reset(); globalThis.document = previousDocument; globalThis.fetch = previousFetch;
     }

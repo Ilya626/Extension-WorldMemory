@@ -43,10 +43,17 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     function invalidate() { serial++; controller?.abort(); prepared = null; recovery = null; injection.clear(); }
     async function finalizeHistory(data) {
         const prompt = data?.prompt, current = ctx(), s = settings(), work = recovery;
-        if (!Array.isArray(prompt) || !s.enabled || s.injectionPosition === -1 || !prepared || !work) return;
+        if (!s.enabled || s.injectionPosition === -1 || !prepared) return;
+        if (!Array.isArray(prompt) || !work) {
+            prepared = { ...prepared, finalTopUp: { status: !Array.isArray(prompt) ? 'unsupported-prompt' : 'retrieval-unavailable' } };
+            return;
+        }
         const isCurrent = () => recovery === work && serial === work.run && ctx().chat === work.chat
             && ctx().chatMetadata === work.metadata && key(snapshot()) === work.key;
-        if (!isCurrent()) return;
+        if (!isCurrent()) {
+            if (recovery === work && serial === work.run) prepared = { ...prepared, finalTopUp: { status: 'changed' } };
+            return;
+        }
         const render = text => current.substituteParams ? current.substituteParams(text) : text;
         const boundary = blindZoneStart(work.chat, s), protectedMessages = [];
         let wireIndex = prompt.length - 1;
@@ -65,7 +72,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             const result = await topUpHistory({ prompt, historyText: prepared.text,
                 targetTokens: s.promptTargetTokens ?? 32000, protectedTokens, inputCapacity: work.inputCapacity,
                 countPrompt: messages => countPromptTokens(messages, current), countText: countTokens, render, isCurrent,
-                expand: targetTokens => selectHistory(work.nodes, work.ranked, { ...work.selectionOptions,
+                expand: targetTokens => selectHistory(work.nodes, [...work.ranked, ...(work.fillCandidates || [])], { ...work.selectionOptions,
                     targetTokens, allowOverflow: false, format: text => render(text) }) });
             if (!isCurrent()) return;
             const { expanded, ...topUp } = result;
@@ -142,8 +149,15 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
                 onProgress: progress => { if (isCurrent() && output) output.textContent = `Preparing search: ${progress.completed} / ${progress.total}. Unchanged vectors are reused.`; } };
             let ranked;
             try { ranked = await search.search({ ...args, semantic: Boolean(settings().historySemantic) }); }
-            catch (error) { if (abort.signal.aborted) throw error; warning = `${error.message} Keyword search is active.`;
-                ranked = await search.search({ ...args, semantic: false }); }
+            catch (error) {
+                if (!isCurrent()) return; // User cancellation/source changes still stop all work.
+                warning = `${error.message} Keyword search is active. Complete saved story baseline kept.`;
+                queryVectors = [];
+                // A semantic timeout must not cancel the local fallback and
+                // final fill. Source ownership remains checked by isCurrent.
+                ranked = await search.search({ ...args, signal: undefined, semantic: false });
+            }
+            const fillCandidates = ranked.fillCandidates || [];
             if (settings().historySpineRerank && queryVectors.length && ranked.length) {
                 try {
                     const cells = storySpineCells(storyNodes).filter(cell => cell.kind === 'compact' && cell.sourceSpans.length);
@@ -155,7 +169,6 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
                     }
                 } catch (error) {
                     if (!isCurrent()) return;
-                    if (abort.signal.aborted) throw error;
                     warning = [warning, 'Story-outline ranking unavailable; original search results kept.'].filter(Boolean).join(' ');
                 }
             }
@@ -164,8 +177,8 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
                 blocks: assembled.blocks, baselineTokens: assembled.baselineTokens, spineInfo: assembled.spineInfo,
-                warning: assembled.warning, diagnostics };
-            recovery = { nodes, ranked, selectionOptions, run, key: snapshotKey, chat: view.chat, metadata,
+                warning: [assembled.warning, warning].filter(Boolean).join(' '), diagnostics };
+            recovery = { nodes, ranked, fillCandidates, selectionOptions, run, key: snapshotKey, chat: view.chat, metadata,
                 inputCapacity: Number(_size) > 0 ? Number(_size) : Infinity };
             if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, tokenCounterStatus(ctx()).warning, assembled.warning, warning].filter(Boolean).join(' ');
             injection.refresh();

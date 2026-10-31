@@ -785,10 +785,16 @@ async function renderContextStatistics(run) {
     const h = stats.history, p = stats.policy;
     document.getElementById('wm_history_capacity').textContent = `Полный L″ / сохранённая история: ≈${n(h.baselineTokens)} · Подробности: ≈${n(h.detailTokens)} · Свободно: ${n(h.freeTokens)} из ${n(h.budgetTokens)} токенов${h.topUpTokens ? ` · Стартовая квота ${n(h.configuredBudgetTokens)}; финальный добор +≈${n(h.topUpTokens)}` : ''}${h.overflowTokens ? ` · Превышение +${n(h.overflowTokens)}; весь скелет сохранён` : ''}${!history?.inspect() ? ' · до поиска подробностей' : ''}`;
     const finalProtected = observed?.finalTopUp?.protectedTokens ?? 0;
+    const fill = observed?.finalTopUp;
+    const fillStatus = { filled: 'выполнен', full: 'запрос уже заполнен', 'no-more-details': 'доступные подробности исчерпаны',
+        'no-fitting-details': 'оставшиеся цельные подробности не помещаются', 'history-not-found': 'блок истории изменён или отсутствует в запросе',
+        changed: 'сборка изменилась во время добора', unavailable: 'ошибка локальной сборки',
+        'retrieval-unavailable': 'подготовка поиска не завершилась', 'unsupported-prompt': 'этот формат запроса не поддерживает добор' };
     const finalAccounted = stats.nativeObservedTokens === null ? null : Math.max(0, stats.nativeObservedTokens - finalProtected);
     const lines = [
         `План: история ${n(p.historyMaxTokens)} + хвост ${n(p.retainedContextTokens)} + рост до сжатия ${n(p.compressionTriggerTokens)} + WI ${p.wiActivationUnlimited ? 'без абсолютного лимита' : n(p.wiActivationTokens)} + резерв инструкций ${n(stats.fixed.estimatedTokens)} = ${n(stats.plannedTokens)} токенов${p.wiActivationUnlimited ? ' или больше' : ''}.`,
         `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. После сборки запроса свободное место добирается деталями истории. Ручные квоты, хвост и WI не уменьшаются.`,
+        ...(fill ? [`Добор истории: ${fillStatus[fill.status] || fill.status}${fill.error ? ` — ${fill.error}` : ''}.`] : []),
         `Сырой текст сейчас: ≈${n(stats.raw.tokens)}; очередь старого текста: ≈${n(stats.raw.availableTokens)} из ${n(p.compressionTriggerTokens)} до сжатия.`,
         `Защищённые обмены: +≈${n(protectedTokens)} сверх бюджета C.`,
         `${stats.fixed.tokens === null ? 'Оценка с плановым резервом F вместо замера инструкций: ≈' : p.wiActivationUnlimited && wiTokens === undefined ? 'Нижняя оценка: от' : 'Оценка текущих частей: ≈'}${n(stats.accountedTokens)} + защита ≈${n(protectedTokens)} = ${n(stats.fullPromptTokens)}${stats.overflowTokens ? ` · выше C на ${n(stats.overflowTokens)} ещё без защиты` : ''}.`,
