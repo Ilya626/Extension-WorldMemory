@@ -782,17 +782,20 @@ async function renderContextStatistics(run) {
     lastContextStatistics = stats;
     const n = value => value === null || value === undefined ? '?' : Math.round(value).toLocaleString();
     const h = stats.history, p = stats.policy;
-    document.getElementById('wm_history_capacity').textContent = `Полный L″ / сохранённая история: ≈${n(h.baselineTokens)} · Подробности: ≈${n(h.detailTokens)} · Свободно: ${n(h.freeTokens)} из ${n(h.budgetTokens)} токенов${h.overflowTokens ? ` · Превышение +${n(h.overflowTokens)}; весь скелет сохранён` : ''}${!history?.inspect() ? ' · до поиска подробностей' : ''}`;
+    document.getElementById('wm_history_capacity').textContent = `Полный L″ / сохранённая история: ≈${n(h.baselineTokens)} · Подробности: ≈${n(h.detailTokens)} · Свободно: ${n(h.freeTokens)} из ${n(h.budgetTokens)} токенов${h.topUpTokens ? ` · Стартовая квота ${n(h.configuredBudgetTokens)}; финальный добор +≈${n(h.topUpTokens)}` : ''}${h.overflowTokens ? ` · Превышение +${n(h.overflowTokens)}; весь скелет сохранён` : ''}${!history?.inspect() ? ' · до поиска подробностей' : ''}`;
+    const finalProtected = observed?.finalTopUp?.protectedTokens ?? 0;
+    const finalAccounted = stats.nativeObservedTokens === null ? null : Math.max(0, stats.nativeObservedTokens - finalProtected);
     const lines = [
         `План: история ${n(p.historyMaxTokens)} + хвост ${n(p.retainedContextTokens)} + рост до сжатия ${n(p.compressionTriggerTokens)} + WI ${p.wiActivationUnlimited ? 'без абсолютного лимита' : n(p.wiActivationTokens)} + резерв инструкций ${n(stats.fixed.estimatedTokens)} = ${n(stats.plannedTokens)} токенов${p.wiActivationUnlimited ? ' или больше' : ''}.`,
-        `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. Ручные значения не уменьшаются. Цель не заполняет запрос автоматически: свободные квоты хвоста, WI и резерва не передаются истории.`,
+        `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. После сборки запроса свободное место добирается деталями истории. Ручные квоты, хвост и WI не уменьшаются.`,
         `Сырой текст сейчас: ≈${n(stats.raw.tokens)}; очередь старого текста: ≈${n(stats.raw.availableTokens)} из ${n(p.compressionTriggerTokens)} до сжатия.`,
         `Защищённые обмены: +≈${n(protectedTokens)} сверх бюджета C.`,
-        `${p.wiActivationUnlimited && wiTokens === undefined ? 'Нижняя оценка сейчас: от' : 'Оценка сейчас: ≈'}${n(stats.accountedTokens)} + защита ≈${n(protectedTokens)} = ${n(stats.fullPromptTokens)}${stats.overflowTokens ? ` · выше C на ${n(stats.overflowTokens)} ещё без защиты` : ''}.`,
+        `${stats.fixed.tokens === null ? 'Оценка с плановым резервом F вместо замера инструкций: ≈' : p.wiActivationUnlimited && wiTokens === undefined ? 'Нижняя оценка: от' : 'Оценка текущих частей: ≈'}${n(stats.accountedTokens)} + защита ≈${n(protectedTokens)} = ${n(stats.fullPromptTokens)}${stats.overflowTokens ? ` · выше C на ${n(stats.overflowTokens)} ещё без защиты` : ''}.`,
         `Инструкции/карточка: ${stats.fixed.tokens === null ? 'резерв F, не замер' : `последний замер ≈${n(stats.fixed.tokens)}`}. WI: ${wiTokens === undefined ? 'ещё не измерена' : 'последняя игровая активация'}. Последний собранный запрос ST: ≈${n(stats.nativeObservedTokens)}; он может отличаться от текущей оценки.`,
-        ...(stats.nativeObservedTokens === null ? [] : [`Последний запрос относительно C: ${stats.nativeObservedTokens < p.promptTargetTokens
-            ? `меньше на ≈${n(p.promptTargetTokens - stats.nativeObservedTokens)} — разница до цели`
-            : `выше на ≈${n(stats.nativeObservedTokens - p.promptTargetTokens)}`}. Защищённые обмены уже включены в этот замер.`])
+        ...(finalAccounted === null ? [] : [`Последний запрос без защищённых обменов: ≈${n(finalAccounted)}; защита +≈${n(finalProtected)} уже включена в полный замер. ${finalAccounted < p.promptTargetTokens
+            ? `До C осталось ≈${n(p.promptTargetTokens - finalAccounted)}`
+            : `Превышение C ≈${n(finalAccounted - p.promptTargetTokens)}`}.`,
+            ...(observed?.finalTopUp?.before === undefined ? [] : [`Финальный добор: ≈${n(observed.finalTopUp.before)} → ≈${n(observed.finalTopUp.after)}, добавлено ≈${n(observed.finalTopUp.addedTokens)} токенов истории.`])])
     ];
     document.getElementById('wm_context_breakdown').replaceChildren(...lines.map(text => {
         const line = document.createElement('div'); line.textContent = text; return line;
@@ -1151,8 +1154,13 @@ async function restoreCardGame(explicit = false) {
         backup = card.data?.extensions?.worldMemoryBackup;
     }
     const game = backup?.chat;
+    // ST expands identity macros while rendering the first greeting. Compare
+    // them without evaluating state-changing or random macros a second time.
+    const greeting = character.first_mes || '';
+    const renderedGreeting = greeting.replace(/\{\{\s*(user|char)\s*\}\}/gi, (tag, name) =>
+        (name.toLowerCase() === 'user' ? context.name1 : context.chat[0]?.name || character.name) ?? tag);
     const fresh = context.chat.length === 0 || (context.chat.length === 1 && !context.chat[0].is_user
-        && context.chat[0].mes === character.first_mes);
+        && (context.chat[0].mes === greeting || context.chat[0].mes === renderedGreeting));
     if (!explicit && (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport)) return false;
     if (backup?.format !== 'world-memory-v1' || game?.format !== 'world-memory-chat-v1'
         || !Array.isArray(game.messages) || !game.messages.length) {

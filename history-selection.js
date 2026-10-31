@@ -34,7 +34,7 @@ export function historyPacketThreads(nodes) {
 
 /** targetTokens excludes the live raw tail, WI and system/card. It is a soft target. */
 export async function selectHistory(nodes, ranked, { targetTokens, countTokens, format = text => text,
-    storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false }) {
+    storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false, allowOverflow = true }) {
     const target = Math.max(0, Number(targetTokens) || 0), excluded = new Set(excludedSourceIds);
     const sourceMap = new Map(storyNodes.flatMap(node => node.sources || []).map(source => [source.id, source]));
     const cells = storySpineCells(storyNodes);
@@ -117,8 +117,10 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
         if (!added.length) continue;
         const next = mergePassages([...passages, ...added]);
         if (JSON.stringify(next) === JSON.stringify(passages)) continue;
+        const rendered = render(next), nextTokens = await countTokens(format(rendered.text));
+        if (!allowOverflow && nextTokens > target) continue;
         passages = next;
-        result = render(passages); tokens = await countTokens(format(result.text)); selected.push(candidate);
+        result = rendered; tokens = nextTokens; selected.push(candidate);
     }
     const missing = cells.filter(cell => cell.kind === 'legacy').length, stale = cells.filter(cell => cell.kind === 'stale').length;
     const unknownOrder = cells.filter(cell => cell.orderKnown === false).length;

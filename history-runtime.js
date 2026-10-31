@@ -5,12 +5,14 @@ import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history
 import { storySpineCells } from './story-spine.js';
 import { rerankStoryCandidates } from './history-spine-rerank.js';
 import { installHistoryInjection } from './history-injection.js';
+import { topUpHistory } from './history-topup.js';
+import { blindZoneStart } from './vendor/summaryception/raw-context.js';
 import { semanticWIQuery } from './semantic-wi-runtime.js';
-import { countTextTokens, prepareTokenCounter, tokenCounterKey, tokenCounterStatus } from './token-counter.js';
+import { countTextTokens, countPromptTokens, prepareTokenCounter, tokenCounterKey, tokenCounterStatus } from './token-counter.js';
 
 const REGEX_ID = 'world-memory-service-hint';
 export function installHistory({ ctx, settings, state, saveState, status, bridge }) {
-    let prepared = null, serial = 0, controller = null;
+    let prepared = null, serial = 0, controller = null, recovery = null;
     const countTokens = text => countTextTokens(text, ctx());
     const embeddings = createEmbeddingVectorClient({ ctx,
         getConfig: () => ({ mode: settings().historyEmbeddingMode || 'api', api: settings().historyEmbeddingAPI || {},
@@ -32,12 +34,49 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         settings().historyMaxTokens, settings().historySemantic, settings().historySpineRerank, profileId(), tokenizerKey()]);
     const getText = () => { if (!settings().enabled || !prepared) return ''; const current = snapshot();
         return current && prepared.key === key(current) ? prepared.text || '' : ''; };
-    const injection = installHistoryInjection({ ctx, settings, getText, onPromptSize: info => {
+    const injection = installHistoryInjection({ ctx, settings, getText, onFinalPrompt: finalizeHistory, onPromptSize: info => {
+        info = { ...info, finalTopUp: prepared?.finalTopUp };
         const output = document.getElementById('wm_prompt_size');
         if (output) output.textContent = `Last full prompt estimate: ${info.tokens ?? info.tokenCount ?? '?'} tokens (${info.estimator}). Context target excludes protected exchanges. Provider usage may differ.`;
         void ctx().eventSource?.emit('worldmemory:prompt-size', info);
     } });
-    function invalidate() { serial++; controller?.abort(); prepared = null; injection.clear(); }
+    function invalidate() { serial++; controller?.abort(); prepared = null; recovery = null; injection.clear(); }
+    async function finalizeHistory(data) {
+        const prompt = data?.prompt, current = ctx(), s = settings(), work = recovery;
+        if (!Array.isArray(prompt) || !s.enabled || s.injectionPosition === -1 || !prepared || !work) return;
+        const isCurrent = () => recovery === work && serial === work.run && ctx().chat === work.chat
+            && ctx().chatMetadata === work.metadata && key(snapshot()) === work.key;
+        if (!isCurrent()) return;
+        const render = text => current.substituteParams ? current.substituteParams(text) : text;
+        const boundary = blindZoneStart(work.chat, s), protectedMessages = [];
+        let wireIndex = prompt.length - 1;
+        for (const source of work.chat.slice(boundary).filter(message => !message.is_system).reverse()) {
+            const text = render(splitHint(source.mes).text).trim(), role = source.is_user ? 'user' : 'assistant';
+            if (!text) continue;
+            for (let index = wireIndex; index >= 0; index--) {
+                const message = prompt[index];
+                if (message.role === role && typeof message.content === 'string' && message.content.trim() === text) {
+                    protectedMessages.push(message); wireIndex = index - 1; break;
+                }
+            }
+        }
+        try {
+            const protectedTokens = protectedMessages.length ? Math.max(0, await countPromptTokens(protectedMessages, current) - 3) : 0;
+            const result = await topUpHistory({ prompt, historyText: prepared.text,
+                targetTokens: s.promptTargetTokens ?? 32000, protectedTokens, inputCapacity: work.inputCapacity,
+                countPrompt: messages => countPromptTokens(messages, current), countText: countTokens, render, isCurrent,
+                expand: targetTokens => selectHistory(work.nodes, work.ranked, { ...work.selectionOptions,
+                    targetTokens, allowOverflow: false, format: text => render(text) }) });
+            if (!isCurrent()) return;
+            const { expanded, ...topUp } = result;
+            if (expanded) prepared = { ...prepared, ...expanded, key: work.key, finalTopUp: topUp };
+            else prepared = { ...prepared, finalTopUp: topUp };
+            const output = document.getElementById('wm_history_status');
+            if (output && result.before !== undefined) output.textContent = `Финальный добор истории: +≈${result.addedTokens} токенов; запрос ≈${result.after} / ${result.target} с защищёнными обменами. Хвост, WI и ручные настройки сохранены.`;
+        } catch (error) {
+            if (isCurrent()) prepared = { ...prepared, finalTopUp: { status: 'unavailable', error: error.message } };
+        }
+    }
     function syncHints(enabled = false) {
         ctx().setExtensionPrompt('world_memory_hint', enabled && settings().enabled && settings().injectionPosition !== -1 && settings().hints ? HINT_PROMPT : '', 1, 0, false, 0);
         const scripts = ctx().extensionSettings.regex ??= [], index = scripts.findIndex(script => script.id === REGEX_ID);
@@ -70,6 +109,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             invalidate(); search = createHistoryVectorRetrieval({ embeddings, countTokens }); chunkTokenizer = tokenizerKey();
         }
         controller?.abort();
+        recovery = null;
         const view = snapshot(), metadata = ctx().chatMetadata, snapshotKey = key(view), run = ++serial;
         const nodes = archiveHistoryNodes(view), storyNodes = archiveStoryNodes(view), query = semanticWIQuery(view.chat);
         if (!storyNodes.length) { prepared = null; injection.refresh(); return; }
@@ -125,6 +165,8 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
                 blocks: assembled.blocks, baselineTokens: assembled.baselineTokens, spineInfo: assembled.spineInfo,
                 warning: assembled.warning, diagnostics };
+            recovery = { nodes, ranked, selectionOptions, run, key: snapshotKey, chat: view.chat, metadata,
+                inputCapacity: Number(_size) > 0 ? Number(_size) : Infinity };
             if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, tokenCounterStatus(ctx()).warning, assembled.warning, warning].filter(Boolean).join(' ');
             injection.refresh();
         } catch (error) {

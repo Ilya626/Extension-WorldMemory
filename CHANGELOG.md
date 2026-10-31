@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.6 — 2026-11-01 — final history top-up
+
+- After the Chat Completion request is assembled, fill its remaining desired-context space with additional already ranked history passages. No new model/embedding calls, no changes to manual allocations, raw messages or WI; protected exchanges remain outside C.
+- Preserve the complete story outline and previously delivered evidence. Only whole additional passages that fit can be committed; existing overflow is preserved. Text Completion is not covered by this final stage.
+- Show the effective history allowance, added detail tokens and before/after full-request size. Keep the original configured quota visible.
+- Recognize ST's macro-expanded first greeting as a fresh chat when restoring an embedded game. Already played chats and authored edits retain their existing guards.
+- Three approved checks cover remaining-space expansion, unchanged raw/WI/settings and overflow preservation. Native validation uses the imported game card and captures the final request before provider dispatch.
+
 ## 0.5.5
 
 - Place already activated character profiles from the latest exchange immediately before the latest player post. Native activation, entry content and saved book positions remain under their existing rules; placement uses the processed chat and excludes synthetic semantic activation keys.

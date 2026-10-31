@@ -63,6 +63,7 @@ export function contextStatistics({ settings = {}, rawPlan = {}, history = {}, p
     const baseline = measured(history.baselineTokens) ? count(history.baselineTokens) : null;
     const historyActual = measured(history.tokens) ? count(history.tokens) : null;
     const historyEstimate = Math.max(historyActual ?? policy.historyMaxTokens, baseline ?? 0);
+    const historyBudget = Math.max(policy.historyMaxTokens, count(history.finalTopUp?.historyTarget));
     const historyDetails = historyActual !== null && baseline !== null ? Math.max(0, historyActual - baseline) : null;
     const retained = count(rawPlan.retainedTokens), available = count(rawPlan.availableTokens);
     const rawTokens = retained + available;
@@ -76,7 +77,7 @@ export function contextStatistics({ settings = {}, rawPlan = {}, history = {}, p
     // Fresh raw + fresh history + current WI + reusable fixed overhead. P is outside C.
     const accountedTokens = rawTokens + historyEstimate + wiEstimate + fixedEstimate;
     const overflowTokens = Math.max(0, accountedTokens - policy.promptTargetTokens);
-    const historyOverflow = Math.max(0, historyEstimate - policy.historyMaxTokens);
+    const historyOverflow = Math.max(0, historyEstimate - historyBudget);
     const plannedTokens = policy.historyMaxTokens + policy.rawMaximumTokens
         + (policy.wiActivationUnlimited ? wiEstimate : policy.wiActivationTokens) + fixedEstimate;
     if (historyOverflow) warnings.push('Complete story outline and whole details exceed the history budget; they remain intact.');
@@ -85,9 +86,10 @@ export function contextStatistics({ settings = {}, rawPlan = {}, history = {}, p
     if (overflowTokens) warnings.push('Accounted context exceeds the desired context; complete story and raw messages are not truncated.');
     return {
         policy,
-        history: { budgetTokens: policy.historyMaxTokens, baselineTokens: baseline, detailTokens: historyDetails,
+        history: { budgetTokens: historyBudget, configuredBudgetTokens: policy.historyMaxTokens,
+            topUpTokens: count(history.finalTopUp?.addedTokens), baselineTokens: baseline, detailTokens: historyDetails,
             tokens: historyActual, estimatedTokens: historyEstimate,
-            freeTokens: Math.max(0, policy.historyMaxTokens - historyEstimate), overflowTokens: historyOverflow },
+            freeTokens: Math.max(0, historyBudget - historyEstimate), overflowTokens: historyOverflow },
         raw: { retainedTokens: retained, availableTokens: available, tokens: rawTokens,
             maximumTokens: policy.rawMaximumTokens, overflowTokens: Math.max(0, rawTokens - policy.rawMaximumTokens) },
         protected: { tokens: protectedActual, exchanges: policy.blindZoneExchanges, outsideBudget: true },

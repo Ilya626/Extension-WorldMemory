@@ -8,7 +8,7 @@ const PROMPT_KEY = 'world_memory_history';
 const MEMORY_START = '<world_memory_story_memory>';
 const MEMORY_END = '</world_memory_story_memory>';
 
-export function installHistoryInjection({ ctx, settings, getText, onPromptSize }) {
+export function installHistoryInjection({ ctx, settings, getText, onPromptSize, onFinalPrompt }) {
     const context = () => typeof ctx === 'function' ? ctx() : ctx;
     const options = () => (typeof settings === 'function' ? settings() : settings) || {};
     let lastInjection = '';
@@ -130,7 +130,19 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize }
     const { eventSource, event_types: events } = context();
     eventSource.on(events.CHAT_COMPLETION_PROMPT_READY, placeMemoryBeforeChat);
     eventSource.on(events.GENERATE_BEFORE_COMBINE_PROMPTS, placeTextMemoryBeforeChat);
-    if (onPromptSize) {
+    if (onFinalPrompt) {
+        // Native WI, raw messages and extension placement have been assembled.
+        // Await this local-only stage before sending or measuring the request.
+        const finalize = async (data, dryRun) => {
+            if (!dryRun) {
+                try { await onFinalPrompt(data); }
+                catch (error) { console.warn('[WorldMemory] Final history top-up unavailable; assembled request retained.', error); }
+            }
+            await measurePrompt(data, dryRun);
+        };
+        (eventSource.makeLast || eventSource.on).call(eventSource, events.GENERATE_AFTER_DATA, finalize);
+    }
+    else if (onPromptSize) {
         // Observe native CC/TC framing without delaying generation or enforcing
         // a budget. Native counters can fall back; this is not provider usage.
         const observe = (data, dryRun) => { void measurePrompt(data, dryRun).catch(() => {}); };
