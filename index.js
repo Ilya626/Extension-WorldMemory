@@ -16,6 +16,7 @@ import { sourceId } from './vendor/summaryception/summary-sources.js';
 import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
+import { portableBackup, portableCard, portablePng } from './card-transfer.js';
 
 const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
@@ -31,7 +32,7 @@ const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awaren
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
 let history, archiveRuntime, semanticWI, knowledgeRuntime;
 let nativeReferenceScope = null;
-let restoringCardGame = false, cardExportPass = null;
+let restoringCardGame = false;
 let cardRestoreTimer = null;
 let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nativePromptSize = null, wiSize = null, wiMeasurementSerial = 0;
 let lastNativeWIScan = null;
@@ -973,7 +974,25 @@ async function readCharacterCard(avatar) {
     const raw = typeof result.json_data === 'string' ? JSON.parse(result.json_data) : null;
     const card = raw?.data ? raw : result;
     if (!card.data?.name) throw new Error('The selected character has no valid V2 card data.');
+    // Raw card JSON can contain an avatar/chat from another installation.
+    card.avatar = avatar; card.chat = result.chat;
     return card;
+}
+async function writeCardExtensions(avatar, card, extensions) {
+    const response = await fetch('/api/characters/edit-attribute', { method: 'POST', headers: ctx().getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar, ch_name: card.data.name, field: 'extensions', value: extensions }) });
+    if (!response.ok) throw new Error(`Could not write card memory (HTTP ${response.status}).`);
+    const written = await readCharacterCard(avatar);
+    const character = ctx().characters.find(item => item.avatar === avatar);
+    if (character) {
+        character.data ??= {}; character.data.extensions = structuredClone(written.data.extensions);
+        character.json_data = JSON.stringify(written);
+        if (ctx().characters[ctx().characterId]?.avatar === avatar) {
+            $('#character_json_data').val(character.json_data);
+            $('#character_world').val(written.data.extensions?.world || '');
+        }
+    }
+    return written;
 }
 function selectedCardAvatar() {
     const context = ctx(), avatar = context.characters[context.characterId]?.avatar;
@@ -1000,19 +1019,11 @@ async function saveMemoryToCard() {
         }
         // Replace this snapshot exactly; a deep merge would retain removed archive records.
         // Read fresh extensions first so native WI bindings and unrelated addons survive.
-        const extensions = { ...card.data.extensions, worldMemoryBackup: backup };
-        const response = await fetch('/api/characters/edit-attribute', { method: 'POST', headers: context.getRequestHeaders(),
-            body: JSON.stringify({ avatar_url: avatar, ch_name: card.data.name, field: 'extensions', value: extensions }) });
-        if (!response.ok) throw new Error(`Could not write card memory (HTTP ${response.status}).`);
-        const written = await readCharacterCard(avatar);
-        if (JSON.stringify(written.data.extensions?.worldMemoryBackup) !== JSON.stringify(backup))
+        const savedBackup = portableBackup(backup);
+        const extensions = { ...card.data.extensions, worldMemoryBackup: savedBackup };
+        const written = await writeCardExtensions(avatar, card, extensions); check();
+        if (JSON.stringify(written.data.extensions?.worldMemoryBackup) !== JSON.stringify(savedBackup))
             throw new Error('The card write could not be verified. Keep the separate backup.');
-        const character = ctx().characters.find(item => item.avatar === avatar);
-        if (character) {
-            character.data ??= {}; character.data.extensions = structuredClone(written.data.extensions);
-            character.json_data = JSON.stringify(written);
-            if (ctx().characters[ctx().characterId]?.avatar === avatar) $('#character_json_data').val(character.json_data);
-        }
         status('Complete game saved in the character card: chat, memory, outline and WI. Export it as PNG in ST.');
     } finally { controller = null; busy = false; renderBusy(); }
 }
@@ -1167,7 +1178,7 @@ async function restoreCardGame(explicit = false) {
         if (explicit) throw new Error('This card has no embedded game chat. Import the original PNG as a file, not a compressed photo.');
         return false;
     }
-    if (busy || archiveRuntime.isBusy()) {
+    if (busy || archiveRuntime.isBusy() || (!explicit && document.querySelector('dialog[open]'))) {
         if (explicit) throw new Error('Wait for the current memory operation to finish, then restore the card game.');
         clearTimeout(cardRestoreTimer);
         const metadata = context.chatMetadata, avatar = character.avatar;
@@ -1205,6 +1216,7 @@ async function restoreCardGame(explicit = false) {
             savedCurrentChat = before;
         }
         const metadata = structuredClone(game.metadata || {}); delete metadata[OWNER];
+        metadata.integrity = crypto.randomUUID();
         // Import author lore to a new native chat book only when its original link is unavailable.
         // Existing books are never overwritten by an imported image.
         const linked = character.data?.extensions?.world;
@@ -1216,6 +1228,10 @@ async function restoreCardGame(explicit = false) {
                 ? structuredClone(embeddedChatLore) : nativeWI.convertCharacterBook(character.data.character_book), true);
             check(); metadata.world_info = name;
         } else if (metadata.world_info && !nativeWI.world_names?.includes(metadata.world_info)) delete metadata.world_info;
+        if (!nativeWI.world_names?.includes(linked) && metadata.world_info) {
+            const card = await readCharacterCard(avatar); check();
+            await writeCardExtensions(avatar, card, { ...card.data.extensions, world: metadata.world_info }); check();
+        }
         if (ctx().chatMetadata !== initialMetadata) throw new Error('Chat changed before the embedded game import.');
         const resumeId = crypto.randomUUID();
         metadata.worldMemoryCardImport = { avatar, resumeId, importedAt: Date.now() };
@@ -1235,6 +1251,11 @@ async function restoreCardGame(explicit = false) {
             || savedCurrentChat !== JSON.stringify({ messages: context.chat, metadata: initialMetadata })))
             throw new Error('Current chat changed during import and was kept open. The imported game is in this character\'s chat list.');
         const importedChatId = result.fileNames[0].replace(/\.jsonl$/, '');
+        // Native openCharacterChat saves the character editor form. Finish the
+        // current selection first, so an old/deleted avatar cannot be submitted.
+        await ctx().selectCharacterById(ctx().characterId); check();
+        if (document.getElementById('avatar_url_pole')?.value !== avatar)
+            throw new Error('Character editor is still changing. The imported game remains in this character\'s chat list. Reopen the character before restoring it.');
         await ctx().openCharacterChat(importedChatId); check();
         if (ctx().chatId !== importedChatId || ctx().chatMetadata.worldMemoryCardImport?.resumeId !== resumeId)
             throw new Error('Chat changed. The embedded game remains in this character\'s chat list; its memory was not applied elsewhere.');
@@ -1248,9 +1269,32 @@ async function restoreCardGame(explicit = false) {
 function interceptNativeCardExport(event) {
     const target = event.target instanceof Element ? event.target.closest('.export_format') : null;
     if (!target || !['png', 'json'].includes(target.dataset.format) || !settings().enabled || !state() || ctx().groupId) return;
-    if (cardExportPass === target) { cardExportPass = null; return; }
     event.preventDefault(); event.stopImmediatePropagation();
-    void saveMemoryToCard().then(() => { cardExportPass = target; target.click(); }).catch(error => {
+    const avatar = selectedCardAvatar(), format = target.dataset.format;
+    void (async () => {
+        // Preserve native save-before-export behavior, but bind its form to the
+        // receiving character before allowing ST to submit it.
+        if (document.getElementById('avatar_url_pole')?.value !== avatar)
+            await ctx().selectCharacterById(ctx().characterId);
+        if (selectedCardAvatar() !== avatar || document.getElementById('avatar_url_pole')?.value !== avatar)
+            throw new Error('Character editor changed before card export.');
+        const { createOrEditCharacter } = await import('/script.js');
+        await createOrEditCharacter();
+        if (selectedCardAvatar() !== avatar) throw new Error('Character changed before card export.');
+        await saveMemoryToCard();
+        if (selectedCardAvatar() !== avatar) throw new Error('Character changed before card export.');
+        // Avoid the native click handler's second full-form character save: its
+        // avatar field can still belong to a previous selection on mobile.
+        const response = await fetch('/api/characters/export', { method: 'POST', headers: ctx().getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: avatar, format }) });
+        if (!response.ok) throw new Error(`Could not export character (HTTP ${response.status}).`);
+        const blob = format === 'png' ? portablePng(await response.arrayBuffer())
+            : new Blob([JSON.stringify(portableCard(await response.json()), null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob), link = document.createElement('a');
+        link.href = url; link.download = avatar.replace(/\.png$/i, `.${format}`); link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        $('#export_format_popup').hide();
+    })().catch(error => {
         status(error.message); toastr.warning(error.message, 'World Memory');
     });
 }

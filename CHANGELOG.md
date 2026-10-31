@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7 — 2026-11-01 — portable card bindings
+
+- Export embedded games without installation-local avatar, lorebook, chat-integrity or previous-import bindings. Keep the chat, archive, author lore and original PNG raster intact.
+- Restore author lore under a new local native binding and bind the receiving character to it when its old book is unavailable. Start the restored chat with its own integrity ID.
+- Refresh the receiving character editor before opening its restored chat. Export directly from the verified native card endpoint instead of submitting a second potentially stale editor form.
+
 ## 0.5.6 — 2026-11-01 — final history top-up
 
 - After the Chat Completion request is assembled, fill its remaining desired-context space with additional already ranked history passages. No new model/embedding calls, no changes to manual allocations, raw messages or WI; protected exchanges remain outside C.

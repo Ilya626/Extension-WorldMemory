@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.6 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.7 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 For Chat Completion, history first uses its configured allowance. After ST assembles the full request, a final local stage measures the remaining space and adds more already ranked history details towards the desired context. It preserves the complete outline, previous details, raw tail, WI and manual settings. Whole passages must fit the remaining space; an already overflowing request is kept whole. Protected exchanges remain outside the desired-context budget. This stage adds no model or embedding calls and does not yet apply to Text Completion. The UI shows the final request separately from the planning allocations.
 
@@ -231,7 +231,7 @@ Import **that one PNG** on a device with WorldMemory0.5.2+ and open the characte
 
 **Token counts:** the context panel identifies the active counter. Real local token IDs are checked; missing Gemini/Gemma or Claude tokenizer assets can make native ST silently use a byte heuristic. WorldMemory then uses an explicitly labelled local o200k estimate. Gemini/Gemma and legacy Claude remain proxies for provider accounting. Native ST trimming and WI scanning retain their own counter/cache and can still differ. C is a planning reference: unused WI/history allowances and trigger headroom do not automatically fill the outgoing request.
 
-**Empty chat after importing a game card?** Reload the ST page after updating through the extension manager, then reopen the imported character. The WorldMemory panel header shows the loaded runtime version: it should be **0.5.3** or newer. The installed version in the manager alone does not show what the open page is running. The panel shows embedded messages/L0 and current messages. **Restore game from card** saves the current chat and opens the whole embedded game as a separate chat. **Read memory from card** imports memory only. Transfer the original PNG as a file, not as a compressed photo.
+**Empty chat after importing a game card?** Reload the ST page after updating through the extension manager, then reopen the imported character. The WorldMemory panel header shows the loaded runtime version: use **0.5.7** or newer for portable card exports and local WI bindings. The installed version in the manager alone does not show what the open page is running. The panel shows embedded messages/L0 and current messages. **Restore game from card** saves the current chat and opens the whole embedded game as a separate chat. **Read memory from card** imports memory only. Transfer the original PNG as a file, not as a compressed photo.
 
 ### Tested setup
 
