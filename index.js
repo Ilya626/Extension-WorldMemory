@@ -2,7 +2,10 @@ import { VERSION, OWNER, SYSTEM, normalize, signature, entryMeta, fingerprint, p
     parseResult, ownedEntries, retainedFacts, detectManual, markGenerated, formatContent,
     readSummaryWI, evidenceRevision, compactRevision, retainedContent, SUMMARY_WI_SYSTEM } from './memory.js';
 import { installHistory } from './history-runtime.js';
-import { createArchive, importLegacyArchive } from './archive-store.js';
+import { createArchive, importLegacyArchive, readArchive } from './archive-store.js';
+import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history-selection.js';
+import { contextPolicy, recommendContextBudget, contextStatistics } from './context-budget.js';
+import { planRawContext, blindZoneStart } from './vendor/summaryception/raw-context.js';
 import { installArchiveRuntime } from './archive-runtime.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
@@ -14,7 +17,9 @@ import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.
 const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
     history: true, hints: true, historySemantic: true, historySpineRerank: false, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
-    historyMaxTokens: 8000, promptTargetTokens: 24000, retainedContextTokens: 8000, batchContextTokens: 24000, blindZoneExchanges: 1,
+    historyMaxTokens: 12000, promptTargetTokens: 32000, retainedContextTokens: 8000, compressionTriggerTokens: 4000,
+    contextReserveTokens: 4000, wiActivationTokens: 4000, wiActivationUnlimited: false,
+    batchContextTokens: 24000, blindZoneExchanges: 1,
     ghostUserMessages: true, ghostAssistantMessages: true, reapplyGhostingOnSummary: false, pauseSummarization: false,
     connectionSource: 'default', connectionProfileId: '', summarizerStreaming: false, summarizerResponseLength: 0,
     openaiUrl: '', openaiKey: '', openaiModel: '', openaiMaxTokens: 0, ollamaUrl: 'http://localhost:11434', ollamaModel: '', ollamaMaxTokens: 0,
@@ -23,11 +28,18 @@ const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awaren
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
 let history, archiveRuntime, semanticWI, knowledgeRuntime;
 let nativeReferenceScope = null;
+let restoringCardGame = false, cardExportPass = null;
+let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nativePromptSize = null, wiSize = null, wiMeasurementSerial = 0;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
 const status = text => { const node = document.getElementById('wm_status'); if (node) node.textContent = text; renderBusy(); };
 const settings = () => {
     const value = ctx().extensionSettings[OWNER] ??= {};
+    if (value.archiveConfigVersion && value.wiActivationUnlimited === undefined) {
+        // Preserve pre-existing native WI choices on upgrade; recommendations are explicit.
+        value.wiActivationUnlimited = !(nativeWI?.world_info_budget_cap > 0);
+        value.wiActivationTokens = nativeWI?.world_info_budget_cap > 0 ? nativeWI.world_info_budget_cap : 4000;
+    }
     if (!value.archiveConfigVersion) {
         const historyWasDisabled = value.history === false && value.injectionPosition === undefined;
         const previous = ctx().extensionSettings.summaryception || {};
@@ -38,7 +50,8 @@ const settings = () => {
             'injectionPosition','injectionDepth','injectionRole','injectionScan','injectionTemplate']) {
             if (value[key] === undefined && previous[key] !== undefined) value[key] = structuredClone(previous[key]);
         }
-        value.historyMaxTokens ??= (Number(value.historyBaseTokens) || 4000) + (Number(value.historyZoomTokens) || 4000);
+        value.historyMaxTokens ??= value.historyBaseTokens !== undefined || value.historyZoomTokens !== undefined
+            ? (Number(value.historyBaseTokens) || 4000) + (Number(value.historyZoomTokens) || 4000) : defaults.historyMaxTokens;
         if (historyWasDisabled) value.injectionPosition = -1;
         value.archiveConfigVersion = 1;
     }
@@ -638,7 +651,7 @@ function schedule() {
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
     $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
-    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
+    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_apply_recommended, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
 function button(text, callback) {
@@ -714,6 +727,62 @@ function renderWIStatus() {
         : scan?.status === 'ready' ? `Last WI scan: ${scan.selected.length} semantic candidates. Native entry rules still apply.`
             : scan?.reason ? `Embedding search was unavailable${scan.error ? ': ' + scan.error : ''}. Native keywords remain active.` : 'Semantic WI will be prepared during the next WI scan.';
 }
+function applyNativeWIBudget() {
+    const s = settings(); if (!s.enabled) return;
+    const cap = s.wiActivationUnlimited ? 0 : Math.max(1, Number(s.wiActivationTokens) || 0);
+    if (nativeWI.world_info_budget_cap !== cap) {
+        nativeWI.updateWorldInfoSettings({ world_info_budget_cap: cap });
+        $('#world_info_budget_cap, #world_info_budget_cap_counter').val(cap);
+    }
+}
+function scheduleContextStatistics() {
+    const run = ++budgetRenderSerial; clearTimeout(budgetRenderTimer);
+    const s = settings(), policy = contextPolicy(s), maximum = document.getElementById('wm_raw_max');
+    if (maximum) maximum.value = policy.rawMaximumTokens;
+    const wiControl = document.getElementById('wm_wi_activation_tokens');
+    if (wiControl) wiControl.disabled = policy.wiActivationUnlimited;
+    budgetRenderTimer = setTimeout(() => { void renderContextStatistics(run).catch(error => {
+        if (run === budgetRenderSerial) document.getElementById('wm_context_breakdown').textContent = `Context estimate unavailable: ${error.message}. Manual values are unchanged.`;
+    }); }, 200);
+}
+async function renderContextStatistics(run) {
+    const context = ctx(), metadata = context.chatMetadata, s = settings(), view = archiveRuntime?.snapshot({ effective: false });
+    const current = () => run === budgetRenderSerial && ctx().chatMetadata === metadata && ctx().chat === context.chat;
+    let rawPlan = {}, selected = { tokens: 0, baselineTokens: 0 }, protectedTokens = 0;
+    if (view && context.chatId) {
+        const archive = getArchive(), legacy = Object.values(archive.legacy || {});
+        rawPlan = await planRawContext(context.chat, { layers: [readArchive(archive)],
+            legacySourceIds: legacy.flatMap(store => store.legacySourceIds || []),
+            skippedMessageIds: [...(archive.skippedMessageIds || []), ...legacy.flatMap(store => store.skippedMessageIds || [])] }, s, () => !current());
+        if (!current()) return;
+        const protectedText = context.chat.slice(blindZoneStart(context.chat, s)).filter(message => !message.is_system)
+            .map(message => `${message.name || (message.is_user ? 'User' : 'Assistant')}: ${message.mes}`).join('\n');
+        protectedTokens = protectedText ? await context.getTokenCountAsync(protectedText, 0) : 0;
+        const prepared = history.inspect();
+        selected = prepared || await selectHistory(archiveHistoryNodes(view), [], { storyNodes: archiveStoryNodes(view),
+            targetTokens: s.historyMaxTokens, countTokens: text => context.getTokenCountAsync(text, 0),
+            format: text => (s.injectionTemplate || '{{summary}}').replace('{{summary}}', () => text) });
+    }
+    if (!current()) return;
+    const wiTokens = wiSize?.metadata === metadata ? wiSize.tokens : undefined;
+    const observed = nativePromptSize?.metadata === metadata ? nativePromptSize.info : null;
+    const stats = contextStatistics({ settings: s, rawPlan, history: selected, protectedTokens, wiTokens, nativePrompt: observed });
+    lastContextStatistics = stats;
+    const n = value => value === null || value === undefined ? '?' : Math.round(value).toLocaleString();
+    const h = stats.history, p = stats.policy;
+    document.getElementById('wm_history_capacity').textContent = `Полный L″ / сохранённая история: ≈${n(h.baselineTokens)} · Подробности: ≈${n(h.detailTokens)} · Свободно: ${n(h.freeTokens)} из ${n(h.budgetTokens)} токенов${h.overflowTokens ? ` · Превышение +${n(h.overflowTokens)}; весь скелет сохранён` : ''}${!history?.inspect() ? ' · до поиска подробностей' : ''}`;
+    const lines = [
+        `План: история ${n(p.historyMaxTokens)} + хвост ${n(p.retainedContextTokens)} + рост до сжатия ${n(p.compressionTriggerTokens)} + WI ${p.wiActivationUnlimited ? 'без абсолютного лимита' : n(p.wiActivationTokens)} + резерв инструкций ${n(stats.fixed.estimatedTokens)} = ${n(stats.plannedTokens)} токенов${p.wiActivationUnlimited ? ' или больше' : ''}.`,
+        `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. Ручные значения не уменьшаются.`,
+        `Сырой текст сейчас: ≈${n(stats.raw.tokens)}; очередь старого текста: ≈${n(stats.raw.availableTokens)} из ${n(p.compressionTriggerTokens)} до сжатия.`,
+        `Защищённые обмены: +≈${n(protectedTokens)} сверх бюджета C.`,
+        `${p.wiActivationUnlimited && wiTokens === undefined ? 'Нижняя оценка сейчас: от' : 'Оценка сейчас: ≈'}${n(stats.accountedTokens)} + защита ≈${n(protectedTokens)} = ${n(stats.fullPromptTokens)}${stats.overflowTokens ? ` · выше C на ${n(stats.overflowTokens)} ещё без защиты` : ''}.`,
+        `Инструкции/карточка: резерв F, не замер. WI: ${wiTokens === undefined ? 'ещё не измерена' : 'последняя игровая активация'}. Последний собранный запрос ST: ≈${n(stats.nativeObservedTokens)}; он может отличаться от текущей оценки.`
+    ];
+    document.getElementById('wm_context_breakdown').replaceChildren(...lines.map(text => {
+        const line = document.createElement('div'); line.textContent = text; return line;
+    }));
+}
 function renderHistoryPlacement(s = settings()) {
     const insideHistory = s.injectionPosition === 1 && s.injectionDepth !== 0;
     document.getElementById('wm_injection_position').value = s.injectionPosition === 1 && s.injectionDepth === 0 ? 'chat_end' : s.injectionPosition;
@@ -726,6 +795,7 @@ function renderHistoryPlacement(s = settings()) {
 }
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
+    scheduleContextStatistics();
     const integration = globalThis.RussianWIForms?.getStatus?.();
     document.getElementById('wm_integration').textContent = `Archive: ${bridge()?.version || 'loading'} · Russian WI: ${integration ? integration.enabled ? integration.ready ? 'ready' : 'loading dictionary' : 'disabled' : 'not loaded (optional)'}`;
     document.getElementById('wm_book').textContent = memory?.book ? `Native book: ${memory.book}` : 'A separate chat-scoped book will be created on the first update.';
@@ -769,7 +839,7 @@ async function render() {
     document.getElementById('wm_summarizer_wi_percent').disabled = !s.summarizerWorldInfo;
     const api = s.historyEmbeddingAPI || {}, local = s.historyEmbeddingLocal || {};
     for (const [id, key, fallback] of [['wm_embedding_url', 'url', ''], ['wm_embedding_key', 'key', ''],
-        ['wm_embedding_model', 'model', 'gemini-embedding-001'], ['wm_embedding_dimensions', 'dimensions', 768],
+        ['wm_embedding_model', 'model', 'gemini-embedding-2-preview'], ['wm_embedding_dimensions', 'dimensions', 768],
         ['wm_embedding_transport', 'transport', 'google-native']]) {
         const input = document.getElementById(id);
         if (document.activeElement !== input) input.value = api[key] ?? fallback;
@@ -780,8 +850,9 @@ async function render() {
     document.getElementById('wm_embedding_local_fields').hidden = s.historyEmbeddingMode !== 'local';
     renderBusy(); renderWIStatus();
 }
-async function applySettings() {
+async function applySettings({ nativeWIBudget = false } = {}) {
     const s = settings(), context = ctx(), memory = state(), metadata = context.chatMetadata;
+    if (nativeWIBudget) { applyNativeWIBudget(); wiSize = null; wiMeasurementSerial++; }
     const owner = memory?.owner, name = memory?.book;
     const check = () => {
         if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || ctx().chatId !== context.chatId
@@ -849,7 +920,8 @@ function selectedCardAvatar() {
     return avatar;
 }
 async function saveMemoryToCard() {
-    if (busy || archiveRuntime.isBusy() || !state()) return;
+    if (busy || archiveRuntime.isBusy()) throw new Error('Wait for the current memory operation before exporting the game.');
+    if (!state()) throw new Error('Open the character chat to export its game.');
     const context = ctx(), metadata = context.chatMetadata, avatar = selectedCardAvatar();
     busy = true; controller = new AbortController(); clearTimeout(timer); renderBusy();
     const check = () => {
@@ -859,6 +931,12 @@ async function saveMemoryToCard() {
     };
     try {
         const backup = await exportBackup(), card = await readCharacterCard(avatar); check();
+        const chatMetadata = structuredClone(context.chatMetadata); delete chatMetadata[OWNER];
+        backup.chat = { format: 'world-memory-chat-v1', messages: structuredClone(context.chat), metadata: chatMetadata };
+        if (chatMetadata.world_info) {
+            const chatLore = await nativeWI.loadWorldInfo(chatMetadata.world_info); check();
+            if (chatLore?.entries) backup.chat.worldInfo = { name: chatMetadata.world_info, data: structuredClone(chatLore) };
+        }
         // Replace this snapshot exactly; a deep merge would retain removed archive records.
         // Read fresh extensions first so native WI bindings and unrelated addons survive.
         const extensions = { ...card.data.extensions, worldMemoryBackup: backup };
@@ -874,7 +952,7 @@ async function saveMemoryToCard() {
             character.json_data = JSON.stringify(written);
             if (ctx().characters[ctx().characterId]?.avatar === avatar) $('#character_json_data').val(character.json_data);
         }
-        status('Memory saved in the character card. Export this card as PNG or JSON in ST. The card includes archived sources and WI; export the ongoing chat separately.');
+        status('Complete game saved in the character card: chat, memory, outline and WI. Export it as PNG in ST.');
     } finally { controller = null; busy = false; renderBusy(); }
 }
 async function loadMemoryFromCard() {
@@ -972,6 +1050,7 @@ async function importBackup(input) {
                 await render(); await renderArchive();
                 status('Backup imported. Review the saved archive and source links before summarizing.');
             }
+            return true;
         } catch (error) {
             if (published && !committed && metadata[OWNER] === next) {
                 metadata[OWNER] = memory;
@@ -984,13 +1063,88 @@ async function importBackup(input) {
             }
             history?.changed(); semanticWI?.invalidate();
             status(error.message); toastr.warning(error.message, 'World Memory');
+            return false;
         } finally {
             if (reserved) { controller = null; busy = false; renderBusy(); }
         }
 }
 
+async function restoreEmbeddedCardGame() {
+    if (restoringCardGame || busy || archiveRuntime.isBusy() || !settings().enabled || ctx().groupId || !state()) return false;
+    const context = ctx(), character = context.characters[context.characterId];
+    const backup = character?.data?.extensions?.worldMemoryBackup, game = backup?.chat;
+    const fresh = context.chat.length === 0 || (context.chat.length === 1 && !context.chat[0].is_user
+        && context.chat[0].mes === character.first_mes);
+    if (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport) return false;
+    if (backup?.format !== 'world-memory-v1' || game?.format !== 'world-memory-chat-v1'
+        || !Array.isArray(game.messages) || !game.messages.length) return false;
+    if (game.messages.some(message => !message || typeof message !== 'object' || typeof message.mes !== 'string'))
+        throw new Error('The card contains an invalid chat. The existing chat was kept.');
+    restoringCardGame = true; busy = true; renderBusy(); clearTimeout(timer);
+    const avatar = character.avatar, initialMetadata = context.chatMetadata;
+    const check = () => {
+        if (ctx().characters[ctx().characterId]?.avatar !== avatar || ctx().groupId)
+            throw new Error('Character changed while restoring the embedded game.');
+    };
+    try {
+        const metadata = structuredClone(game.metadata || {}); delete metadata[OWNER];
+        // Import author lore to a new native chat book only when its original link is unavailable.
+        // Existing books are never overwritten by an imported image.
+        const linked = character.data?.extensions?.world;
+        const embeddedChatLore = game.worldInfo?.data;
+        if (embeddedChatLore?.entries || (!nativeWI.world_names?.includes(linked) && character.data?.character_book?.entries?.length)) {
+            const name = `WorldMemory_CardLore_${crypto.randomUUID()}`;
+            if (!await nativeWI.createNewWorldInfo(name, { interactive: false })) throw new Error('Could not restore embedded author WI.');
+            check(); await nativeWI.saveWorldInfo(name, embeddedChatLore?.entries
+                ? structuredClone(embeddedChatLore) : nativeWI.convertCharacterBook(character.data.character_book), true);
+            check(); metadata.world_info = name;
+        } else if (metadata.world_info && !nativeWI.world_names?.includes(metadata.world_info)) delete metadata.world_info;
+        if (ctx().chatMetadata !== initialMetadata) throw new Error('Chat changed before the embedded game import.');
+        const resumeId = crypto.randomUUID();
+        metadata.worldMemoryCardImport = { avatar, resumeId, importedAt: Date.now() };
+        const header = { user_name: context.name1, character_name: character.name,
+            create_date: new Date().toISOString(), chat_metadata: metadata };
+        const text = [header, ...game.messages].map(value => JSON.stringify(value)).join('\n') + '\n';
+        const form = new FormData();
+        form.append('avatar', new File([text], 'WorldMemory-Game.jsonl', { type: 'application/jsonl' }));
+        form.append('file_type', 'jsonl'); form.append('avatar_url', avatar);
+        form.append('character_name', character.name); form.append('user_name', context.name1);
+        const response = await fetch('/api/chats/import', { method: 'POST', headers: context.getRequestHeaders({ omitContentType: true }), body: form });
+        if (!response.ok) throw new Error(`Embedded chat import failed (HTTP ${response.status}).`);
+        const result = await response.json(); check();
+        if (!result.res || result.fileNames?.length !== 1) throw new Error('ST could not import the embedded chat.');
+        if (ctx().chatMetadata !== initialMetadata) throw new Error('Chat changed. The imported game remains in this character\'s chat list.');
+        const importedChatId = result.fileNames[0].replace(/\.jsonl$/, '');
+        await ctx().openCharacterChat(importedChatId); check();
+        if (ctx().chatId !== importedChatId || ctx().chatMetadata.worldMemoryCardImport?.resumeId !== resumeId)
+            throw new Error('Chat changed. The embedded game remains in this character\'s chat list; its memory was not applied elsewhere.');
+        busy = false;
+        if (!await importBackup(backup)) throw new Error('Chat restored, but its memory needs Read memory from card.');
+        status('Game restored from one PNG: original chat, complete memory and World Info. Ready to continue.');
+        return true;
+    } finally { restoringCardGame = false; busy = false; renderBusy(); }
+}
+
+function interceptNativeCardExport(event) {
+    const target = event.target instanceof Element ? event.target.closest('.export_format') : null;
+    if (!target || !['png', 'json'].includes(target.dataset.format) || !settings().enabled || !state() || ctx().groupId) return;
+    if (cardExportPass === target) { cardExportPass = null; return; }
+    event.preventDefault(); event.stopImmediatePropagation();
+    void saveMemoryToCard().then(() => { cardExportPass = target; target.click(); }).catch(error => {
+        status(error.message); toastr.warning(error.message, 'World Memory');
+    });
+}
+
 async function init() {
+    const freshProfile = !ctx().extensionSettings[OWNER];
     nativeWI = await import('/scripts/world-info.js'); settings();
+    if (!freshProfile) {
+        // Native WI may have been changed while this addon was disabled or in another tab.
+        // Reflect that manual choice on load instead of restoring an older addon cap.
+        const cap = Math.max(0, Number(nativeWI.world_info_budget_cap) || 0), s = settings();
+        s.wiActivationUnlimited = cap === 0;
+        if (cap > 0) s.wiActivationTokens = cap;
+    }
     $('#extensions_settings2').append(await ctx().renderExtensionTemplateAsync('third-party/Extension-WorldMemory', 'settings', {}));
     getArchive();
     if (await claimArchiveRuntime()) return;
@@ -1012,6 +1166,16 @@ async function init() {
         }
     };
     globalThis.worldMemoryPrepareHistory = prepareContext;
+    document.addEventListener('click', interceptNativeCardExport, true);
+    $('#wm_apply_recommended').on('click', () => {
+        if (busy || archiveRuntime.isBusy()) return;
+        const s = settings();
+        const recommended = recommendContextBudget(s.promptTargetTokens, { historyBaselineTokens: lastContextStatistics?.history.baselineTokens || 0 });
+        Object.assign(s, recommended, { enabled: true, history: true, hints: true, historySemantic: true, wiSemantic: false, historyEmbeddingMode: 'api',
+            injectionPosition: 0, historySpineRerank: false, knowledgeBoundaries: false, awarenessGraph: false });
+        s.historyEmbeddingAPI = { ...s.historyEmbeddingAPI, model: 'gemini-embedding-2-preview', revision: 'gemini-embedding-2-preview', dimensions: 768, transport: 'google-native' };
+        void applySettings({ nativeWIBudget: true }).then(() => status('Recommendations applied for the chosen context. All allowances remain editable; connection URLs and keys were kept.')).catch(error => status(error.message));
+    });
     archiveRuntime.setHistoryProvider(() => history.inspect()?.text || '');
     installWorldInfoTracking(ctx());
     populateProfileDropdown(document.getElementById('wm_connection_profile'), settings().connectionProfileId, value => {
@@ -1054,9 +1218,16 @@ async function init() {
             if (control.tagName === 'SELECT' && typeof defaults[control.dataset.setting] === 'number') value = Number(value);
             if (control.id === 'wm_injection_depth' && settings().injectionDepth > 0) settings().injectionInsideDepth = settings().injectionDepth;
             settings()[control.dataset.setting] = value;
-            void applySettings().catch(error => status(error.message));
+            void applySettings({ nativeWIBudget: ['wiActivationTokens', 'wiActivationUnlimited'].includes(control.dataset.setting) }).catch(error => status(error.message));
         });
     }
+    $('#world_info_budget_cap, #world_info_budget_cap_counter').on('input.worldMemory', event => {
+        const cap = Math.max(0, Number(event.target.value) || 0), s = settings();
+        s.wiActivationUnlimited = cap === 0;
+        if (cap > 0) s.wiActivationTokens = cap;
+        wiSize = null; wiMeasurementSerial++; ctx().saveSettingsDebounced();
+        void render().catch(error => status(error.message));
+    });
     document.getElementById('wm_main_names').addEventListener('change', async event => {
         if (!state()) return;
         state().mainNames = names(event.target.value); await saveState();
@@ -1094,11 +1265,23 @@ async function init() {
     const events = ctx().eventTypes || ctx().event_types;
     // Runs before RussianWI's normal listener, so it can expand the new ordinary keys too.
     ctx().eventSource.makeFirst(events.WORLDINFO_ENTRIES_LOADED, injectBook);
-    ctx().eventSource.on(events.WORLDINFO_SCAN_DONE, renderWIStatus);
-    ctx().eventSource.on('worldmemory:archive-changed', event => { if (event.metadata === ctx().chatMetadata) { history.changed(); schedule(); } });
-    ctx().eventSource.on(events.CHAT_CHANGED, () => {
+    ctx().eventSource.on(events.WORLDINFO_SCAN_DONE, async args => {
+        renderWIStatus();
+        if (args?.state?.next || getSummaryWorldInfoSources() || nativeReferenceScope) return;
+        const metadata = ctx().chatMetadata, text = args?.activated?.text || '', measurement = wiMeasurementSerial;
+        const measured = text ? await ctx().getTokenCountAsync(text, 0) : 0;
+        if (ctx().chatMetadata === metadata && measurement === wiMeasurementSerial && !getSummaryWorldInfoSources() && !nativeReferenceScope) {
+            wiSize = { metadata, tokens: measured }; scheduleContextStatistics();
+        }
+    });
+    ctx().eventSource.on('worldmemory:prompt-size', info => { nativePromptSize = { metadata: ctx().chatMetadata, info }; scheduleContextStatistics(); });
+    ctx().eventSource.on('worldmemory:archive-changed', event => { if (event.metadata === ctx().chatMetadata) { history.changed(); schedule(); scheduleContextStatistics(); } });
+    ctx().eventSource.on(events.CHAT_CHANGED, async () => {
         clearTimeout(timer); controller?.abort(); getArchive();
-        void claimArchiveRuntime().then(() => Promise.all([render(), renderArchive()])).catch(error => status(error.message));
+        try {
+            if (await restoreEmbeddedCardGame()) return;
+            await claimArchiveRuntime(); await Promise.all([render(), renderArchive()]);
+        } catch (error) { status(error.message); }
     });
     for (const event of [events.MESSAGE_EDITED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED].filter(Boolean)) ctx().eventSource.on(event, () => {
         clearTimeout(timer); controller?.abort(new Error('Chat sources changed.'));
@@ -1106,12 +1289,15 @@ async function init() {
         return cleanupSourceChanges().then(() => renderArchive()).catch(error => status(error.message));
     });
     ctx().eventSource.on(events.WORLDINFO_UPDATED, () => { if (!busy) void render().catch(error => status(error.message)); });
-    await render(); await renderArchive(); status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
+    await render(); await renderArchive();
+    if (freshProfile) applyNativeWIBudget();
+    try { await restoreEmbeddedCardGame(); } catch (error) { status(error.message); }
+    status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
     globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
         archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow,
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),
         prepareHistory: prepareContext, inspectHistory: () => history.inspect(), inspectSemanticWI: () => semanticWI.inspect(),
-        inspectKnowledge: () => knowledgeRuntime.inspect(),
+        inspectKnowledge: () => knowledgeRuntime.inspect(), inspectContextBudget: () => lastContextStatistics ? structuredClone(lastContextStatistics) : null,
         getStatus: () => ({ busy, book: state()?.book || null, enabled: settings().enabled,
             history: Boolean(settings().enabled && settings().injectionPosition !== -1),
             summaryWI: Boolean(settings().enabled && settings().auto),

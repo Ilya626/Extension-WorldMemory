@@ -1,57 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="836" viewBox="0 0 960 836" role="img" aria-labelledby="title desc">
-<title id="title">Игровой вход: примеры 24k и 32k рядом</title><desc id="desc">Игровой вход: примеры 24k и 32k рядом. Illustrative numbers, not measured token use.</desc>
-<rect x="0" y="0" width="960" height="836" rx="16" fill="#ffffff" stroke="white" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1100" viewBox="0 0 760 1100" role="img" aria-labelledby="title desc">
+<title id="title">Контекст: цель C и защита + P</title><desc id="desc">Рекомендации 24k и 32k; защита P вне C; ручные значения не ограничиваются целью.</desc>
+<rect width="760" height="1100" rx="16" fill="#fff"/>
 <g font-family="Segoe UI,Arial,sans-serif" fill="#172b42">
-<text x="36" y="46" font-size="30" font-weight="700" text-anchor="start">Игровой вход: примеры 24k и 32k рядом</text>
-<text x="36" y="84" font-size="23" font-weight="400" text-anchor="start">Общая шкала 32k; числа — примеры, не резерв места.</text>
-<text x="36" y="134" font-size="26" font-weight="700" text-anchor="start">24k · история и ориентир новой установки</text>
-<text x="48" y="160" font-size="18" font-weight="600" text-anchor="middle">0</text>
-<text x="264" y="160" font-size="18" font-weight="600" text-anchor="middle">8k</text>
-<text x="480" y="160" font-size="18" font-weight="600" text-anchor="middle">16k</text>
-<text x="696" y="160" font-size="18" font-weight="600" text-anchor="middle">24k</text>
-<text x="912" y="160" font-size="18" font-weight="600" text-anchor="middle">32k</text>
-<rect x="48" y="176" width="81" height="84" rx="0" fill="#b9e0ca" stroke="white" stroke-width="2"/>
-<text x="88.5" y="203" font-size="20" font-weight="600" text-anchor="middle">1</text>
-<text x="88.5" y="240" font-size="27" font-weight="700" text-anchor="middle">3k</text>
-<rect x="129" y="176" width="216" height="84" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="237" y="203" font-size="20" font-weight="600" text-anchor="middle">2</text>
-<text x="237" y="240" font-size="27" font-weight="700" text-anchor="middle">8k</text>
-<rect x="345" y="176" width="216" height="84" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="453" y="203" font-size="20" font-weight="600" text-anchor="middle">3</text>
-<text x="453" y="240" font-size="27" font-weight="700" text-anchor="middle">8k</text>
-<rect x="561" y="176" width="81" height="84" rx="0" fill="#bcd9f5" stroke="white" stroke-width="2"/>
-<text x="601.5" y="203" font-size="20" font-weight="600" text-anchor="middle">4</text>
-<text x="601.5" y="240" font-size="27" font-weight="700" text-anchor="middle">3k</text>
-<rect x="642" y="176" width="54" height="84" rx="0" fill="#d8cdf3" stroke="white" stroke-width="2"/>
-<text x="669" y="203" font-size="20" font-weight="600" text-anchor="middle">5</text>
-<text x="669" y="240" font-size="27" font-weight="700" text-anchor="middle">2k</text>
-<path d="M696,168 v100" stroke="#be4132" stroke-width="3" stroke-dasharray="6 4"/>
-<text x="48" y="296" font-size="25" font-weight="650" text-anchor="start">3k + 8k + 8k + 3k + 2k = 24k</text>
-<text x="36" y="344" font-size="26" font-weight="700" text-anchor="start">32k · больше места для найденной истории</text>
-<rect x="48" y="366" width="81" height="84" rx="0" fill="#b9e0ca" stroke="white" stroke-width="2"/>
-<text x="88.5" y="393" font-size="20" font-weight="600" text-anchor="middle">1</text>
-<text x="88.5" y="430" font-size="27" font-weight="700" text-anchor="middle">3k</text>
-<rect x="129" y="366" width="432" height="84" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="345" y="393" font-size="20" font-weight="600" text-anchor="middle">2</text>
-<text x="345" y="430" font-size="27" font-weight="700" text-anchor="middle">16k</text>
-<rect x="561" y="366" width="216" height="84" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="669" y="393" font-size="20" font-weight="600" text-anchor="middle">3</text>
-<text x="669" y="430" font-size="27" font-weight="700" text-anchor="middle">8k</text>
-<rect x="777" y="366" width="81" height="84" rx="0" fill="#bcd9f5" stroke="white" stroke-width="2"/>
-<text x="817.5" y="393" font-size="20" font-weight="600" text-anchor="middle">4</text>
-<text x="817.5" y="430" font-size="27" font-weight="700" text-anchor="middle">3k</text>
-<rect x="858" y="366" width="54" height="84" rx="0" fill="#d8cdf3" stroke="white" stroke-width="2"/>
-<text x="885" y="393" font-size="20" font-weight="600" text-anchor="middle">5</text>
-<text x="885" y="430" font-size="27" font-weight="700" text-anchor="middle">2k</text>
-<path d="M912,358 v100" stroke="#be4132" stroke-width="3" stroke-dasharray="6 4"/>
-<text x="48" y="486" font-size="25" font-weight="650" text-anchor="start">3k + 16k + 8k + 3k + 2k = 32k</text>
-<text x="36" y="532" font-size="23" font-weight="600" text-anchor="start">1 Карточка 3k · 2 История 8k/16k · 3 Сырой хвост 8k</text>
-<text x="36" y="568" font-size="23" font-weight="600" text-anchor="start">4 WI 3k · 5 Защищённый обмен + текущий пост 2k</text>
-<text x="36" y="604" font-size="22" font-weight="400" text-anchor="start">3k / 3k / 2k условны; 32k и 16k — не новые defaults.</text>
-<rect x="36" y="624" width="888" height="88" rx="10" fill="#fff3ec" stroke="white" stroke-width="2"/>
-<text x="52" y="657" font-size="24" font-weight="700" text-anchor="start">32k: Max history tokens → 16,000</text>
-<text x="52" y="693" font-size="24" font-weight="650" text-anchor="start">Full RP prompt target → 32,000; Raw tail = 8,000</text>
-<text x="36" y="747" font-size="21" font-weight="400" text-anchor="start">Окно модели и резерв ответа — в ST; мягкий ориентир может быть превышен.</text>
-<text x="36" y="783" font-size="21" font-weight="600" text-anchor="start">Подсказка событий OFF; при ON входит в тот же общий контекст ST.</text>
-<text x="36" y="818" font-size="21" font-weight="400" text-anchor="start">Её лимит: 12 000 символов целыми строками, а не бюджет токенов.</text>
+<text x="28" y="44" font-size="31" font-weight="700" text-anchor="start">Контекст: цель C и защита + P</text>
+<text x="28" y="83" font-size="25" font-weight="400" text-anchor="start">Общая шкала 32k · рекомендации по кнопке</text>
+<text x="28" y="126" font-size="29" font-weight="700" text-anchor="start">Цель C = 24k</text>
+<rect x="36" y="146" width="172" height="84" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="122" y="175" font-size="23" font-weight="650" text-anchor="middle">H</text>
+<text x="122" y="213" font-size="29" font-weight="700" text-anchor="middle">8k</text>
+<rect x="208" y="146" width="129" height="84" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="272.5" y="175" font-size="23" font-weight="650" text-anchor="middle">R</text>
+<text x="272.5" y="213" font-size="29" font-weight="700" text-anchor="middle">6k</text>
+<rect x="337" y="146" width="64.5" height="84" rx="0" fill="#f9b6a8" stroke="#fff" stroke-width="2"/>
+<text x="369.25" y="175" font-size="23" font-weight="650" text-anchor="middle">T</text>
+<text x="369.25" y="213" font-size="29" font-weight="700" text-anchor="middle">3k</text>
+<rect x="401.5" y="146" width="64.5" height="84" rx="0" fill="#bcd9f5" stroke="#fff" stroke-width="2"/>
+<text x="433.75" y="175" font-size="23" font-weight="650" text-anchor="middle">W</text>
+<text x="433.75" y="213" font-size="29" font-weight="700" text-anchor="middle">3k</text>
+<rect x="466" y="146" width="86" height="84" rx="0" fill="#b9e0ca" stroke="#fff" stroke-width="2"/>
+<text x="509" y="175" font-size="23" font-weight="650" text-anchor="middle">F</text>
+<text x="509" y="213" font-size="29" font-weight="700" text-anchor="middle">4k</text>
+<path d="M552,138 v100" stroke="#9c3d30" stroke-width="3" stroke-dasharray="6 4"/>
+<text x="36" y="268" font-size="27" font-weight="650" text-anchor="start">H8 + R6 + T3 + W3 + F4 = N24k</text>
+<rect x="36" y="288" width="688" height="57" rx="10" fill="#e0d4f5" stroke="#9278b1" stroke-dasharray="7 5" stroke-width="2"/>
+<text x="53" y="324" font-size="25" font-weight="650" text-anchor="start">+ P · защищённый текст; размер переменный</text>
+<text x="28" y="390" font-size="29" font-weight="700" text-anchor="start">Цель C = 32k</text>
+<rect x="36" y="410" width="258" height="84" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="165" y="439" font-size="23" font-weight="650" text-anchor="middle">H</text>
+<text x="165" y="477" font-size="29" font-weight="700" text-anchor="middle">12k</text>
+<rect x="294" y="410" width="172" height="84" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="380" y="439" font-size="23" font-weight="650" text-anchor="middle">R</text>
+<text x="380" y="477" font-size="29" font-weight="700" text-anchor="middle">8k</text>
+<rect x="466" y="410" width="86" height="84" rx="0" fill="#f9b6a8" stroke="#fff" stroke-width="2"/>
+<text x="509" y="439" font-size="23" font-weight="650" text-anchor="middle">T</text>
+<text x="509" y="477" font-size="29" font-weight="700" text-anchor="middle">4k</text>
+<rect x="552" y="410" width="86" height="84" rx="0" fill="#bcd9f5" stroke="#fff" stroke-width="2"/>
+<text x="595" y="439" font-size="23" font-weight="650" text-anchor="middle">W</text>
+<text x="595" y="477" font-size="29" font-weight="700" text-anchor="middle">4k</text>
+<rect x="638" y="410" width="86" height="84" rx="0" fill="#b9e0ca" stroke="#fff" stroke-width="2"/>
+<text x="681" y="439" font-size="23" font-weight="650" text-anchor="middle">F</text>
+<text x="681" y="477" font-size="29" font-weight="700" text-anchor="middle">4k</text>
+<path d="M724,402 v100" stroke="#9c3d30" stroke-width="3" stroke-dasharray="6 4"/>
+<text x="36" y="532" font-size="27" font-weight="650" text-anchor="start">H12 + R8 + T4 + W4 + F4 = N32k</text>
+<rect x="36" y="552" width="688" height="57" rx="10" fill="#e0d4f5" stroke="#9278b1" stroke-dasharray="7 5" stroke-width="2"/>
+<text x="53" y="588" font-size="25" font-weight="650" text-anchor="start">+ P · защищённый текст; размер переменный</text>
+<rect x="30" y="669" width="28" height="28" rx="5" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="72" y="692" font-size="25" font-weight="600" text-anchor="start">H · История: весь L″ + найденные оригиналы</text>
+<rect x="30" y="711" width="28" height="28" rx="5" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="72" y="734" font-size="25" font-weight="600" text-anchor="start">R · Постоянный сырой хвост</text>
+<rect x="30" y="753" width="28" height="28" rx="5" fill="#f9b6a8" stroke="#fff" stroke-width="2"/>
+<text x="72" y="776" font-size="25" font-weight="600" text-anchor="start">T · Рост сырого текста до начала сжатия</text>
+<rect x="30" y="795" width="28" height="28" rx="5" fill="#bcd9f5" stroke="#fff" stroke-width="2"/>
+<text x="72" y="818" font-size="25" font-weight="600" text-anchor="start">W · Активация WI</text>
+<rect x="30" y="837" width="28" height="28" rx="5" fill="#b9e0ca" stroke="#fff" stroke-width="2"/>
+<text x="72" y="860" font-size="25" font-weight="600" text-anchor="start">F · Резерв карточки / system / hints</text>
+<text x="28" y="910" font-size="25" font-weight="650" text-anchor="start">P переменный, не входит в полосу C.</text>
+<text x="28" y="951" font-size="24" font-weight="400" text-anchor="start">Ручной N может быть больше C; скрытых клампов нет.</text>
+<text x="28" y="990" font-size="24" font-weight="400" text-anchor="start">Максимум raw = R + T; защита + P отдельно.</text>
+<text x="28" y="1029" font-size="24" font-weight="400" text-anchor="start">B = 24k максимум на вызов ≠ T = 4k (при C32).</text>
+<text x="28" y="1068" font-size="24" font-weight="400" text-anchor="start">Окно модели и резерв ответа задаются в ST.</text>
 </g></svg>

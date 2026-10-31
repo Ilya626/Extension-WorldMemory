@@ -1,65 +1,59 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1280" viewBox="0 0 960 1280" role="img" aria-labelledby="title desc">
-<title id="title">Inside History: 8k and 16k</title><desc id="desc">Inside History: 8k and 16k. Illustrative numbers, not measured token use.</desc>
-<rect x="0" y="0" width="960" height="1280" rx="16" fill="#ffffff" stroke="white" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1244" viewBox="0 0 760 1244" role="img" aria-labelledby="title desc">
+<title id="title">Inside History: H8k and H12k</title><desc id="desc">Full L″4100 and labels 300 stay unchanged; details3600 or7600; originals follow their matching steps.</desc>
+<rect width="760" height="1244" rx="16" fill="#fff"/>
 <g font-family="Segoe UI,Arial,sans-serif" fill="#172b42">
-<text x="36" y="46" font-size="30" font-weight="700" text-anchor="start">Inside History: 8k and 16k</text>
-<text x="36" y="84" font-size="23" font-weight="400" text-anchor="start">Segment 2 of the input bars: 24k → history 8k; 32k → history 16k.</text>
-<rect x="36" y="110" width="888" height="98" rx="10" fill="#f7f9fc" stroke="white" stroke-width="2"/>
-<rect x="36" y="220" width="888" height="118" rx="10" fill="#f7f9fc" stroke="white" stroke-width="2"/>
-<rect x="36" y="350" width="888" height="98" rx="10" fill="#f7f9fc" stroke="white" stroke-width="2"/>
-<rect x="36" y="460" width="888" height="98" rx="10" fill="#f7f9fc" stroke="white" stroke-width="2"/>
-<text x="52" y="141" font-size="25" font-weight="700" text-anchor="start">1 · Keep the complete available L″, without a search gate</text>
-<text x="52" y="172" font-size="23" font-weight="400" text-anchor="start">Every compact step from every packet stays present.</text>
-<text x="52" y="200" font-size="23" font-weight="400" text-anchor="start">In BOTH examples: skeleton A 1,900 + B 2,200 = 4,100.</text>
-<text x="52" y="253" font-size="25" font-weight="700" text-anchor="start">2 · Independently search using the player post</text>
-<text x="52" y="285" font-size="23" font-weight="400" text-anchor="start">Originals + search notes; words/lemmas + embeddings.</text>
-<text x="52" y="312" font-size="23" font-weight="400" text-anchor="start">Rank windows by relevance; merge overlapping windows.</text>
-<text x="52" y="381" font-size="25" font-weight="700" text-anchor="start">3 · Spend the remainder on whole original passages</text>
-<text x="52" y="413" font-size="22" font-weight="400" text-anchor="start">Budget − L″ 4,100 − labels 300: 8k → 3,600; 16k → 11,600.</text>
-<text x="52" y="441" font-size="23" font-weight="400" text-anchor="start">More room for retrieved detail; the skeleton is not doubled.</text>
-<text x="52" y="491" font-size="25" font-weight="700" text-anchor="start">4 · Put each passage after its matching chronology step</text>
-<text x="52" y="523" font-size="23" font-weight="400" text-anchor="start">A → details #18 → B → details #71. L″ steps are never replaced.</text>
-<text x="52" y="551" font-size="23" font-weight="400" text-anchor="start">Ranking chooses details; chronology sets their order.</text>
-<text x="36" y="606" font-size="26" font-weight="700" text-anchor="start">One complete skeleton, different amounts of source detail</text>
-<text x="48" y="646" font-size="18" font-weight="600" text-anchor="middle">0</text>
-<text x="264" y="646" font-size="18" font-weight="600" text-anchor="middle">4k</text>
-<text x="480" y="646" font-size="18" font-weight="600" text-anchor="middle">8k</text>
-<text x="696" y="646" font-size="18" font-weight="600" text-anchor="middle">12k</text>
-<text x="912" y="646" font-size="18" font-weight="600" text-anchor="middle">16k</text>
-<text x="36" y="690" font-size="25" font-weight="700" text-anchor="start">8k history within the 24k total input</text>
-<rect x="48" y="712" width="102.6" height="88" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="99.3" y="743" font-size="22" font-weight="600" text-anchor="middle">L″ A</text>
-<text x="99.3" y="780" font-size="26" font-weight="700" text-anchor="middle">1.9k</text>
-<rect x="150.6" y="712" width="97.2" height="88" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="199.2" y="743" font-size="22" font-weight="600" text-anchor="middle">Hits A</text>
-<text x="199.2" y="780" font-size="26" font-weight="700" text-anchor="middle">1.8k</text>
-<rect x="247.8" y="712" width="118.8" height="88" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="307.2" y="743" font-size="22" font-weight="600" text-anchor="middle">L″ B</text>
-<text x="307.2" y="780" font-size="26" font-weight="700" text-anchor="middle">2.2k</text>
-<rect x="366.6" y="712" width="97.2" height="88" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="415.2" y="743" font-size="22" font-weight="600" text-anchor="middle">Hits B</text>
-<text x="415.2" y="780" font-size="26" font-weight="700" text-anchor="middle">1.8k</text>
-<rect x="463.8" y="712" width="16.2" height="88" rx="0" fill="#d8cdf3" stroke="white" stroke-width="2"/>
-<text x="36" y="838" font-size="24" font-weight="650" text-anchor="start">L″ 4,100 + details 3,600 + labels 300 = 8,000</text>
-<text x="36" y="892" font-size="25" font-weight="700" text-anchor="start">16k history within the 32k total input</text>
-<rect x="48" y="914" width="102.6" height="88" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="99.3" y="945" font-size="22" font-weight="600" text-anchor="middle">L″ A</text>
-<text x="99.3" y="982" font-size="26" font-weight="700" text-anchor="middle">1.9k</text>
-<rect x="150.6" y="914" width="313.2" height="88" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="307.2" y="945" font-size="22" font-weight="600" text-anchor="middle">Passages A</text>
-<text x="307.2" y="982" font-size="26" font-weight="700" text-anchor="middle">5.8k</text>
-<rect x="463.8" y="914" width="118.8" height="88" rx="0" fill="#f6cb85" stroke="white" stroke-width="2"/>
-<text x="523.2" y="945" font-size="22" font-weight="600" text-anchor="middle">L″ B</text>
-<text x="523.2" y="982" font-size="26" font-weight="700" text-anchor="middle">2.2k</text>
-<rect x="582.6" y="914" width="313.2" height="88" rx="0" fill="#ffe8a3" stroke="white" stroke-width="2"/>
-<text x="739.2" y="945" font-size="22" font-weight="600" text-anchor="middle">Passages B</text>
-<text x="739.2" y="982" font-size="26" font-weight="700" text-anchor="middle">5.8k</text>
-<rect x="895.8" y="914" width="16.2" height="88" rx="0" fill="#d8cdf3" stroke="white" stroke-width="2"/>
-<text x="36" y="1040" font-size="24" font-weight="650" text-anchor="start">L″ 4,100 + details 11,600 + labels 300 = 16,000</text>
-<text x="36" y="1080" font-size="22" font-weight="600" text-anchor="start">Orange: L″ A/B · yellow: originals · purple: labels, 300 in each bar</text>
-<text x="36" y="1118" font-size="22" font-weight="400" text-anchor="start">Common 16k scale; yellow blocks total whole source passages.</text>
-<text x="36" y="1154" font-size="22" font-weight="400" text-anchor="start">Illustration only: actual L″, label and passage sizes vary.</text>
-<text x="36" y="1190" font-size="22" font-weight="400" text-anchor="start">Whole windows may overflow. Without L″, labelled full L0 remains.</text>
-<text x="36" y="1226" font-size="22" font-weight="400" text-anchor="start">Raw tail, WI, setup and optional event evidence are outside History.</text>
-<text x="36" y="1262" font-size="20" font-weight="400" text-anchor="start">Vectors are reused; query embeddings may call the API. No LLM judge.</text>
+<text x="28" y="44" font-size="31" font-weight="700" text-anchor="start">Inside History: H8k and H12k</text>
+<text x="28" y="83" font-size="27" font-weight="600" text-anchor="start">C24k → H8k · C32k → H12k</text>
+<rect x="28" y="106" width="704" height="100" rx="10" fill="#f4f7fb" stroke="#fff" stroke-width="2"/>
+<text x="43" y="135" font-size="25" font-weight="700" text-anchor="start">1 · Keep the complete compact L″</text>
+<text x="43" y="166" font-size="24" font-weight="400" text-anchor="start">One skeleton: A 1,900 + B 2,200 = 4,100.</text>
+<text x="43" y="195" font-size="24" font-weight="400" text-anchor="start">Every packet, in both history allowances.</text>
+<rect x="28" y="218" width="704" height="100" rx="10" fill="#f4f7fb" stroke="#fff" stroke-width="2"/>
+<text x="43" y="247" font-size="25" font-weight="700" text-anchor="start">2 · Search independently from the player post</text>
+<text x="43" y="278" font-size="24" font-weight="400" text-anchor="start">Words / lemmas + embeddings + search notes.</text>
+<text x="43" y="307" font-size="24" font-weight="400" text-anchor="start">Rank windows; merge overlapping passages.</text>
+<rect x="28" y="330" width="704" height="100" rx="10" fill="#f4f7fb" stroke="#fff" stroke-width="2"/>
+<text x="43" y="359" font-size="25" font-weight="700" text-anchor="start">3 · Spend the remainder on whole originals</text>
+<text x="43" y="390" font-size="24" font-weight="400" text-anchor="start">H8k: details 3,600 · H12k: details 7,600.</text>
+<text x="43" y="419" font-size="24" font-weight="400" text-anchor="start">L″ 4,100 and labels 300 stay the same.</text>
+<rect x="28" y="442" width="704" height="100" rx="10" fill="#f4f7fb" stroke="#fff" stroke-width="2"/>
+<text x="43" y="471" font-size="25" font-weight="700" text-anchor="start">4 · Add originals after their matching steps</text>
+<text x="43" y="502" font-size="24" font-weight="400" text-anchor="start">A → details A → B → details B.</text>
+<text x="43" y="531" font-size="24" font-weight="400" text-anchor="start">Search selects detail; chronology sets order.</text>
+<text x="28" y="610" font-size="28" font-weight="700" text-anchor="start">History H = 8k</text>
+<rect x="36" y="630" width="108.933" height="88" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="90.4667" y="661" font-size="23" font-weight="650" text-anchor="middle">L″ A</text>
+<text x="90.4667" y="698" font-size="26" font-weight="700" text-anchor="middle">1.9k</text>
+<rect x="144.933" y="630" width="103.2" height="88" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="196.533" y="661" font-size="23" font-weight="650" text-anchor="middle">Hits A</text>
+<text x="196.533" y="698" font-size="26" font-weight="700" text-anchor="middle">1.8k</text>
+<rect x="248.133" y="630" width="126.133" height="88" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="311.2" y="661" font-size="23" font-weight="650" text-anchor="middle">L″ B</text>
+<text x="311.2" y="698" font-size="26" font-weight="700" text-anchor="middle">2.2k</text>
+<rect x="374.267" y="630" width="103.2" height="88" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="425.867" y="661" font-size="23" font-weight="650" text-anchor="middle">Hits B</text>
+<text x="425.867" y="698" font-size="26" font-weight="700" text-anchor="middle">1.8k</text>
+<rect x="477.467" y="630" width="17.2" height="88" rx="0" fill="#d8cdf3" stroke="#fff" stroke-width="2"/>
+<text x="28" y="757" font-size="24" font-weight="650" text-anchor="start">L″ 4,100 + details 3,600 + labels 300 = 8,000</text>
+<text x="28" y="802" font-size="28" font-weight="700" text-anchor="start">History H = 12k</text>
+<rect x="36" y="822" width="108.933" height="88" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="90.4667" y="853" font-size="23" font-weight="650" text-anchor="middle">L″ A</text>
+<text x="90.4667" y="890" font-size="26" font-weight="700" text-anchor="middle">1.9k</text>
+<rect x="144.933" y="822" width="217.867" height="88" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="253.867" y="853" font-size="23" font-weight="650" text-anchor="middle">Hits A</text>
+<text x="253.867" y="890" font-size="26" font-weight="700" text-anchor="middle">3.8k</text>
+<rect x="362.8" y="822" width="126.133" height="88" rx="0" fill="#f6cb85" stroke="#fff" stroke-width="2"/>
+<text x="425.867" y="853" font-size="23" font-weight="650" text-anchor="middle">L″ B</text>
+<text x="425.867" y="890" font-size="26" font-weight="700" text-anchor="middle">2.2k</text>
+<rect x="488.933" y="822" width="217.867" height="88" rx="0" fill="#ffe8a3" stroke="#fff" stroke-width="2"/>
+<text x="597.867" y="853" font-size="23" font-weight="650" text-anchor="middle">Hits B</text>
+<text x="597.867" y="890" font-size="26" font-weight="700" text-anchor="middle">3.8k</text>
+<rect x="706.8" y="822" width="17.2" height="88" rx="0" fill="#d8cdf3" stroke="#fff" stroke-width="2"/>
+<text x="28" y="949" font-size="24" font-weight="650" text-anchor="start">L″ 4,100 + details 7,600 + labels 300 = 12,000</text>
+<text x="28" y="1004" font-size="24" font-weight="600" text-anchor="start">Orange: L″ · yellow: originals · purple: labels</text>
+<text x="28" y="1044" font-size="24" font-weight="400" text-anchor="start">Common 12k scale. Composition sizes are illustrative.</text>
+<text x="28" y="1084" font-size="24" font-weight="650" text-anchor="start">More source detail; the same skeleton, never doubled.</text>
+<text x="28" y="1124" font-size="24" font-weight="400" text-anchor="start">Whole windows / full L″ may exceed allowance H.</text>
+<text x="28" y="1164" font-size="24" font-weight="400" text-anchor="start">R, T, W, F and protected P are outside History H.</text>
+<text x="28" y="1204" font-size="24" font-weight="400" text-anchor="start">No extra LLM judge call for each RP reply.</text>
 </g></svg>

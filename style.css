@@ -26,6 +26,15 @@
 .world-memory-settings .wm-muted { opacity: .78; font-size: .88em; line-height: 1.5; overflow-wrap: anywhere; }
 .world-memory-settings small.wm-muted { display: block; margin: .4rem 0; }
 .world-memory-settings .wm-status { padding: .6rem .7rem; border-left: 3px solid var(--SmartThemeQuoteColor, #888); line-height: 1.45; overflow-wrap: anywhere; }
+.world-memory-settings .wm-recommended { padding: .75rem; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: .5rem; }
+.world-memory-settings .wm-recommended > b { display: block; line-height: 1.4; }
+.world-memory-settings .wm-context-target .text_pole { font-size: 1.2em; font-weight: 600; }
+.world-memory-settings .wm-context .wm-budget-grid { align-items: start; }
+.world-memory-settings .wm-context input[readonly] { opacity: .75; cursor: default; }
+.world-memory-settings .wm-capacity, .world-memory-settings .wm-context-breakdown { margin-top: .5rem; padding: .5rem .6rem; border-left: 2px solid var(--SmartThemeBorderColor, #555); }
+.world-memory-settings .wm-context-breakdown { font-variant-numeric: tabular-nums; }
+.world-memory-settings #wm_apply_recommended { display: block; width: 100%; min-height: 2.75rem; margin: .65rem 0; }
+.world-memory-settings .wm-secondary > summary { font-size: .95em; }
 .world-memory-settings .wm-record { padding: .7rem 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); min-width: 0; }
 .world-memory-settings .wm-record pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; max-height: 20rem; overflow: auto; }
 .world-memory-settings .wm-record header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2 — 2026-10-31 — one-image games and explicit context controls
+
+- Native ST PNG/JSON export now saves the selected chat, source-linked archive, full available outline and managed WI in the card. Importing such a card resumes its embedded game in a fresh empty chat; existing chats stay intact. Missing author lore is restored into a separate native chat book without overwriting existing books.
+- Add a visible context planner: desired context C, protected exchanges P outside C, permanent raw tail R, compression trigger T, maximum raw R+T, history H with full-outline/detail/free-space statistics, native WI cap or no absolute cap, and reply hints. API settings and maximum source tokens per summary call are separate.
+- Changing C or any manual allowance never redistributes other manual values. Recommendations apply only through the explicit button. The planner displays N=H+R+T+W+F, N−C and protected tokens separately; F is labelled as a planning reserve. Native WI cap changes synchronize back to WorldMemory.
+- Automatic compression uses the explicit T threshold. The source-packet size B limits one summary request and is no longer its minimum launch threshold. Whole exchanges, protected content and the complete outline are retained on overflow.
+- Recommend 32k as H12k/R8k/T4k/W4k/F4k, or 24k as H8k/R6k/T3k/W3k/F4k, plus protected exchanges. Existing settings remain; recommendations do not change URLs or credentials.
+- Default to Google `gemini-embedding-2-preview` / 768 and semantic history; keep reply hints on. Outline reranking, semantic WI, NPC information events and the graph remain off. Existing explicit choices and separate model caches are preserved. [Selection evidence](docs/FEATURE_DEFAULTS.md).
+- Four context-policy checks cover recommendations, the real raw planner's separate trigger, complete-outline overflow and preservation of manual settings. Native checks cover the planner on a mobile-width panel and one-image transfer on a fresh ST data directory. [Measured scope](docs/VALIDATION_0_5_2.md).
+
 ## 0.5.1 — 2026-10-31 — portable memory in character cards
 
 - Add **Portable backup → Save memory to card / Read memory from card**. Store an explicit `world-memory-v1` snapshot in `data.extensions.worldMemoryBackup`, preserved by native PNG/JSON card export. Include L0, available L″, archived originals, search metadata and the managed WI book; keep author lore and other card fields.

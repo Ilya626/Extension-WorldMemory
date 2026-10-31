@@ -1,5 +1,6 @@
 import { collectPassage, pendingSourceIds, sourceId } from './summary-sources.js';
 import { getModelOutputIssue } from './output-validation.js';
+import { summaryDecision } from '../../context-budget.js';
 
 const positive = (value, fallback) => Math.max(1, Math.floor(Number(value) || fallback));
 
@@ -55,6 +56,7 @@ export async function planRawContext(chat, store, settings, stopped = () => fals
     const retained = Number(settings.retainedContextTokens ?? 12000);
     const retainedBudget = Number.isFinite(retained) ? Math.max(0, Math.floor(retained)) : 12000;
     const batchBudget = positive(settings.batchContextTokens, 24000);
+    const triggerBudget = positive(settings.compressionTriggerTokens, batchBudget);
     let boundary = eligible.length;
     let retainedTokens = 0;
     while (boundary > 0 && retainedTokens < retainedBudget) retainedTokens += eligible[--boundary].tokens;
@@ -79,7 +81,9 @@ export async function planRawContext(chat, store, settings, stopped = () => fals
     if (currentTokens) batchCount++;
     return { passage, batchTokens, availableTokens, retainedTokens, batchBudget, retainedBudget,
         batchCount,
-        ready: availableTokens >= batchBudget, hasBatch: batch.length > 0,
+        ready: summaryDecision({ policy: { ...settings, compressionTriggerTokens: triggerBudget },
+            rawPlan: { availableTokens, hasBatch: batch.length > 0 } }).ready,
+        triggerBudget, hasBatch: batch.length > 0,
         availableMessageIds: available.flatMap(group => group.sourceMessageIds),
         blindStart, blindExchanges: groups.filter(group => group.indices[0] >= blindStart).length,
         estimated: eligible.some(group => group.estimated) };

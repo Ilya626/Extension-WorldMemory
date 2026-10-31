@@ -309,6 +309,8 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const plan = await planRawContext(owner.chat, view(owner.archive), config(), () => owner.controller.signal.aborted);
         guard(owner);
         if (!plan.hasBatch || (!force && !plan.ready)) return null;
+        if (plan.batchTokens > plan.batchBudget)
+            warn(`A complete exchange uses ${plan.batchTokens} estimated source tokens, above the ${plan.batchBudget} packet maximum. It is kept whole rather than truncated.`);
         const passage = plan.passage, sources = originals(owner, passage.sourceMessageIds);
         const previous = predecessor(null, passage.indices[0]);
         const result = await generateL0(owner, sources, previous);

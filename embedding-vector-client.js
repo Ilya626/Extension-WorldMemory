@@ -9,8 +9,8 @@ export const LOCAL_EMBEDDING_DEFAULTS = Object.freeze({
 });
 
 export const API_EMBEDDING_DEFAULTS = Object.freeze({
-    model: 'gemini-embedding-001', dimensions: 768, transport: 'google-native',
-    revision: 'gemini-embedding-001', authStyle: 'auto', batchSize: 64, maxBatchCharacters: 24000,
+    model: 'gemini-embedding-2-preview', dimensions: 768, transport: 'google-native',
+    revision: 'gemini-embedding-2-preview', authStyle: 'auto', batchSize: 64, maxBatchCharacters: 24000,
 });
 const DB_NAME = 'world-memory-embedding-vectors-v1';
 const STORE = 'vectors';

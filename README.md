@@ -6,59 +6,72 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.1 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.2 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+
+## Start with the recommended setup
+
+1. Set **Desired context (tokens)** on the main panel, then use **Recommend values for this context · Подобрать значения**. Every suggested value remains editable. Updating the addon does not apply this button for you.
+2. Configure **Summarizer connection** for background memory preparation. Your RP model stays in ST's normal connection.
+3. Configure **Search and embeddings** with your provider's URL/key. Recommended: **gemini-embedding-2-preview, 768 dimensions**; no local model is required.
+4. Continue chatting. The main panel shows protected exchanges, permanent tail, compression trigger, maximum raw, history capacity, WI activation allowance, search hints and prompt accounting. Archive maintenance and experiments stay in closed sections.
+
+The target is a recommendation input, **not a hard cap**. Manual changes to one field do not silently reduce history, WI or the compression trigger. The lower panel counts your choices: **planned N = history H + permanent tail R + trigger T + WI W + setup/system/hints F**, its difference from target C, and **protected exchanges P separately**. A 32k plan can therefore produce **32k + P** input tokens; whole fragments, complete L″ or processing backlog can add overflow. ST's model context and response reserve remain separate.
+
+| Target C | History H | Tail R | Trigger T | WI W | Setup reserve F |
+| --- | --- | --- | --- | --- | --- |
+| 32,000 | 12,000 | 8,000 | 4,000 | 4,000 | 4,000 |
+| 24,000 | 8,000 | 6,000 | 3,000 | 3,000 | 4,000 |
+
+These are button recommendations, not limits on manual settings. History contains **the complete available L″ plus retrieved originals**. WI uses native activation and Russian WI Forms inflections. Hidden search hints are recommended on; semantic WI, outline reranking and NPC/graph experiments are off. Unlimited WI is an explicit option and can make the plan exceed the target.
+
+The embedding choice follows a two-game comparison: at nominal 32k, preview delivered four additional fully supported natural-post needs with no support losses. This measures retrieved evidence, not better RP replies; individual losses occurred on other inputs. Hints remain an engineering default without an on/off quality result. Reranking and NPC/graph additions showed mixed results; semantic WI remains optional pending comparable gameplay evidence. [Selection and limits](docs/FEATURE_DEFAULTS.md).
 
 **Complete chronological outline (L″).** The entire available outline remains in each history-enabled prompt; independently retrieved originals follow their matching steps. New L0 packets include a short outline in the same model response. Older archives need explicit preparation; until then, complete labelled L0 accounts remain and can greatly exceed the target. Manual text is preserved. The growing L0 archive, full L″ and normal retrieval are unchanged in 0.5.0. [Earlier outline validation](docs/VALIDATION_0_4.md).
-
-**New, optional NPC information events.** The existing second background request can also record source-bound `observed` / `reported` events for managed character profiles. A separate optional local graph adds related evidence without an LLM call. **Both controls default to off.** The limited comparison gave mixed results and did not establish an overall RP improvement. [0.5.0 measured scope and limits](docs/VALIDATION_0_5.md).
 
 ## What the model receives
 
 For a normal chat reply, SillyTavern combines your character/setup, recent chat, selected earlier history and active World Info. **WorldMemory never inserts its entire archive into every reply.**
 
-| Part | Purpose | Default |
-| --- | --- | --- |
-| **Raw tail (tokens)** | Keep recent messages in their original form | 8,000 tokens |
-| **Max history tokens (soft target)** | Shared allowance for the complete skeleton, in-place original passages and labels; raw tail is separate | 8,000 tokens, soft target |
-| **World Info · entity reference** | Supply reference entries through ST's native activation and budget | Separate chat-scoped book |
-| **Full RP prompt target (tokens)** | Show a size reference for the whole input, including character/setup and WI | 24,000 tokens, soft target |
+| Main-panel control | Meaning |
+| --- | --- |
+| **Desired context (tokens)** | Planning budget for setup, active WI, retrieved history and ordinary raw chat; protected exchanges are outside it. |
+| **Protected exchanges · BlindZone** | Recent complete exchanges and the unanswered post stay uncompressed. Their actual token size is reported separately. |
+| **Permanent raw tail** | Recent originals retained after compression, beyond protected exchanges. |
+| **Compression trigger** | Amount of eligible raw text allowed to accumulate beyond the permanent tail before compression starts. |
+| **Maximum raw before compression** | Read-only **permanent tail + compression trigger**. Protected text is extra; whole messages and processing backlog can exceed this planning value. |
+| **History allowance** | Complete available L″ + retrieved original passages + labels. Inline statistics show full L″, used details and free allowance. |
+| **WI activation allowance / Unlimited WI** | Allowance for native WI activation, with an explicit unlimited option. Native conditions still apply; unlimited WI can exceed the desired context. |
+| **Hidden search hints** | Recommended on; a short scene cue in the same reply helps later retrieval without an extra generation call. |
+| **Setup/system/hints reserve F** | Advanced fallback for planning when a measurement is unavailable; always included in the arithmetic. It does not adjust other fields. |
 
-Raw chat and retrieved history have separate allowances. Whole history fragments can exceed their target; the full-prompt target is not a hard cap on ST's request. Neither limits the saved archive.
+The breakdown distinguishes the budget, protected text, actual assembled prompt and overflow. These controls do not limit the saved archive or guarantee a hard cap on ST's API request.
 
 **History answers “what happened?”; WI answers “who or what is this?”** History can recover a conversation in which a workshop keeper lent a visitor a key until morning. The keeper's WI entry describes the person, workshop and relevant relationships. It is reusable reference, not another scene-by-scene diary.
 
-## Prompt fill bar: defaults and controls
+<details>
+<summary>Context budgets and examples (advanced)</summary>
 
-The bar is a **numeric example** for a fresh installation: history 8,000 + raw tail 8,000 + setup 3,000 + WI 3,000 + protected exchange/current post 2,000 = **24,000 input tokens**. Only the two 8,000 settings, protection of 1 exchange and whole-input target 24,000 are defaults; the other sizes are illustrative. Each segment names its control and the restriction that actually applies.
+The recommendations account for **the permanent tail, growth up to the compression trigger, history, WI and setup together**. A history/raw split alone omits room needed before the next compression. Change the target and apply the button explicitly; manual allocations remain untouched otherwise.
 
-![24,000-token prompt fill example, segment sizes, soft targets and controls](docs/assets/prompt-budget-en.svg)
+The lower arithmetic reports **N = H + R + T + W + F**, **N − C**, and **+ protected P**. F is an explicit planning reserve for card/system/hints, not their measured size. With unlimited WI, its actual activated size is needed for finite accounting. Actual prompt size and overrun are separate from this plan. Whole messages, complete L″, native WI, other extensions and pending compression can add more. Leave the response reserve in ST separately.
 
-**Compare with 32,000 input tokens:** keep setup 3,000 + raw tail 8,000 + WI 3,000 + protected exchange/current post 2,000, and increase history from 8,000 to **16,000**. Change **Max history tokens → 16,000** and **Full RP prompt target → 32,000**; raising only the latter does not enlarge history. These are example settings, not new defaults. The remaining component sizes stay illustrative.
+![Recommended C24k and C32k allocations: H8/R6/T3/W3/F4 and H12/R8/T4/W4/F4, with variable protected P outside C](docs/assets/prompt-budget-24k-32k-en.svg)
 
-![24k and 32k input examples on the same scale, with history 8k and 16k and the two controls to change](docs/assets/prompt-budget-24k-32k-en.svg)
+The bars show button recommendations, not manual limits. The separate **+ P** is variable; it is never a fixed segment inside C. **B = 24k maximum source tokens per call** is a background API limit, separate from the **T = 4k** compression trigger in the 32k recommendation. [24k view with the same accounting](docs/assets/prompt-budget-en.svg).
 
-**24,000 − 8,000 − 8,000 leaves roughly 8,000 for everything else: a planning example, not a reserved quota.** Character and WI size depend on your ST settings. The input can exceed the target; whole exchanges and source fragments are not clipped to fit this arithmetic. Set the model's context window and output reserve separately in ST. Token counts are estimates and can differ from provider usage.
+### Inside History: from search to the 8,000 / 12,000-token segment
 
-**Optional information-event context is off in this example.** When enabled and delivered, it adds to the same total ST input: the parts above **+ the optional GM evidence**. ST counts it during prompt assembly. Its cap is **12,000 characters in whole rows**, not a token allowance or reserved space; check the actual assembled prompt and leave room within your model's context window.
+![History H8k and H12k: the same complete L″, independent retrieval and whole original passages after their matching chronology steps](docs/assets/history-cutaway-en.svg)
 
-| Part | How it is assembled |
-| --- | --- |
-| **History: 8,000** | First assemble the complete available chronological L″. Independently rank originals using the player post, words/lemmas and embeddings. Every compact skeleton step stays present. Retrieved passages are added immediately after their matching steps. The skeleton and labels consume the allowance first, then whole expansions use the remainder. Overflow is reported. |
-| **Raw tail: 8,000 + protection** | Recent whole exchanges stay verbatim. By default, the latest **1 completed exchange** and any unanswered post are protected from summarization/automatic hiding and excluded from that 8,000-token count. More originals can remain while older packets await processing. |
-| **WI in the RP request** | Entry text is stored, but activation is checked each turn. Enabled Constant entries need no keyword trigger; other entries depend on keys and conditions. Native ST rules and budget still apply. RussianWI adds word forms; semantic WI is off by default. Generated WI defaults to System at in-chat depth 2; author entries retain their own positions. Retrieved history is not itself added to the WI scan by default. |
-| **Stable instructions** | System prompt, character, persona and enabled service instructions use the remaining space. Max history tokens does not set their size. |
-
-### Inside History: from search to the 8,000 / 16,000-token segment
-
-![History 8k and 16k: the same complete L″, independent retrieval, merged overlaps and more original detail in chronological order](docs/assets/history-cutaway-en.svg)
-
-The cutaway expands **segment 2** of the bars above. In this numerical example the same full L″ uses **4,100 tokens** (A 1,900 + B 2,200), with **300** for labels. That leaves **3,600** for whole retrieved passages within history 8,000, or **11,600** within history 16,000. More allowance can admit more source detail; it does not double the skeleton. Actual sizes and selected passages depend on the archive and query, and whole fragments can exceed either soft target.
+The cutaway expands **H8k / H12k** from the recommendations. Its composition is an illustration: the same full L″ uses **4,100 tokens** (A 1,900 + B 2,200), with **300** for labels. That leaves **3,600** for whole retrieved passages within history 8,000, or **7,600** within history 12,000. More allowance can admit more source detail; it does not enlarge the skeleton. Actual L″ and passage sizes vary, and whole fragments can exceed either soft target.
 
 The request contains one timeline: **step A → step B + details B → step C → step D + details D**, followed by recent raw chat. The entire short L″ always remains in the prompt, giving the answering model the whole story; L′/search notes support retrieval and do not replace chronology. Search failure keeps the skeleton. Manually visible archived messages can repeat; a warning and reader instruction retain their status as older events. Removing them before final ST trimming could lose their only representation.
 
-**Two different WI budgets:** **WI context allowance = 20%** applies to the **separate summarizer request**. With Source tokens per summary = 24,000, that allows up to **4,800 WI tokens**. It does not reserve 20% of the RP prompt. Configure the ordinary RP WI budget in ST's own World Info settings. Likewise, 24,000 source tokens is not the complete background request size: previous L0, instructions and selected WI add overhead.
+**Two different WI budgets:** **WI context allowance = 20%** applies to the **separate summarizer request**. For a source packet of 24,000 tokens, that allows up to **4,800 WI tokens**. It does not reserve 20% of the RP prompt. The main-panel **WI activation allowance / Unlimited WI** controls ordinary RP WI activation; native rules still select entries. The 24,000 source-token maximum per call is not the compression trigger or the complete background request size: previous L0, instructions and selected WI add overhead.
 
-These are fresh-install defaults; updates/imports can retain your earlier settings. Indexes and vectors are reused: the selection is rebuilt each turn, not the entire archive. There is no extra LLM judge/verifier call for each RP reply.
+Updates/imports retain earlier settings unless you explicitly apply the recommended setup. Indexes and vectors are reused: the selection is rebuilt each turn, not the entire archive. There is no extra LLM judge/verifier call for each RP reply.
+
+</details>
 
 ## Two paths: saving memory and answering a turn
 
@@ -66,7 +79,7 @@ These are fresh-install defaults; updates/imports can retain your earlier settin
 
 ```mermaid
 flowchart TD
-    O["Older source packet<br/>Source tokens per summary: 24,000"] --> A["1 · Generate L0 + L″ in one response → save"]
+    O["Older eligible sources<br/>Packet limited by maximum source tokens per call"] --> A["1 · Generate L0 + L″ in one response → save"]
     P["Immediately preceding L0"] --> A
     A --> B["2 · Generate L′, search excerpts, WI<br/>and optional information events"]
     A --> K["L″: source-bound chronology nodes<br/>For the reader, separate from retrieval"]
@@ -90,9 +103,9 @@ flowchart TD
         J["Saved L″: compact chronology of the whole game"]
         W["Connected WI entry texts"]
         Q["Latest player post text"] --> R["Search: words + query embedding<br/>Saved notes help rank sources"]
-        R --> H["Complete L″ + details after matching steps<br/>Shared history soft target ~8,000"]
+        R --> H["Complete L″ + details after matching steps<br/>Visible history allowance"]
         J --> H
-        T["Recent original messages: ~8,000<br/>Plus protected exchange"]
+        T["Permanent raw tail + trigger growth<br/>Protected exchanges are extra"]
         S["Native WI scan of ST context<br/>Constant + keys + rules + budget"]
         S --> X["WI entries activated for this turn"]
         G["ST assembles the final input<br/>Default: memory immediately before chat<br/>WI keeps its configured positions"]
@@ -134,7 +147,7 @@ Prompt ingredients are **character/setup + complete L″ with in-place source ex
    | **API URL** | Your provider's embedding API base URL; for Google's native API, `https://generativelanguage.googleapis.com` |
    | **API key** | The key for that endpoint |
    | **API format** | **Google / Gemini embeddings** |
-   | **Embedding model** | `gemini-embedding-001` |
+   | **Embedding model** | `gemini-embedding-2-preview` |
    | **Advanced embedding API settings → Dimensions** | `768` |
 
    For an OpenAI-style endpoint, select **OpenAI-compatible embeddings** and enter its supported embedding model and dimensions. A chat model name is not an embedding model.
@@ -158,9 +171,10 @@ A new packet uses **two sequential background generation requests** through the 
 
 These requests are separate from your ordinary chat reply. Embedding requests also send indexed text and search queries to the configured embedding service. Changed sources are indexed as needed; unchanged vectors are reused. Background generation can receive native WI as read-only context, controlled by **Advanced summarizer context**.
 
-The default source packet is 24,000 tokens. The raw tail and **BlindZone (recent exchanges)** protect recent messages; BlindZone defaults to one exchange. Find these settings and **Pause automatic summarization** under **Advanced history and packet settings**. Original messages remain in the chat; hiding controls decide which summarized messages are sent to the model. Reapplying automatic hiding is off by default to preserve manual visibility choices.
+The main-panel **Compression trigger** decides when eligible older raw text is ready to compress. **Maximum source tokens per call**, under **Summarizer connection**, separately limits how many source tokens one background request processes; it is not the compression threshold. The permanent raw tail and protected exchanges remain. **Pause automatic summarization** is under **Advanced history and packet settings**. Original messages remain in the chat; hiding controls decide which summarized messages are sent to the model. Reapplying automatic hiding is off by default to preserve manual visibility choices.
 
-## Optional NPC information events
+<details>
+<summary>Optional NPC information events and local graph (experimental)</summary>
 
 Under **World Info · entity reference**, **Track NPC information events (experimental)** records who directly observed information (`observed`) or received a statement (`reported`). A received statement is not automatically true or believed. Missing events do not prove ignorance; later original dialogue can establish discovery. The GM keeps access to the whole story and its secrets. Exact quotations and code-bound source ranges establish provenance, not correct interpretation.
 
@@ -178,6 +192,8 @@ The addition follows the **final native WI selection**, including keywords, Cons
 The added context is capped at **12,000 characters**, retaining whole rows. An oversized graph view falls back to direct events, preferring recent rows while keeping source order. This cap neither allocates tokens nor limits the archive. Normal preparation still uses **two background generation calls per ready packet**; enabling events adds no permanent third call or per-turn LLM call. Explicit older-archive preparation can require additional requests as described above.
 
 Source edits, unavailable/hidden evidence, changed L0 or replaced character identities can invalidate events. Missing or unsupported event output preserves saved L0 and valid search/WI data; an empty event array is valid. Previously stored experimental epistemic rows remain available as legacy data; new preparation requests the simpler information events. [Technical boundaries](docs/KNOWLEDGE_BOUNDARIES.md) · [Measured results](docs/VALIDATION_0_5.md).
+
+</details>
 
 ## Review, edit and recover
 
@@ -201,9 +217,9 @@ For an existing Summaryception setup, WorldMemory imports the saved archive and 
 
 **Import backup replaces the receiving chat's WorldMemory state.** Export that state first. A lorebook alone cannot restore history; keep both the WorldMemory backup and the original chat.
 
-**Memory inside a character card:** choose **Portable backup → Save memory to card**, then use ST's normal PNG or JSON card export. The snapshot includes L0, the complete available L″, archived originals, search metadata and the managed WI book; author lore and other card fields are preserved. API keys and connection settings are not included.
+**One PNG carries the game:** use ST's normal **Export → PNG** on the selected character while its chat is open. WorldMemory automatically saves the current chat, L0, complete available L″, archived originals, search metadata, managed WI and linked chat lore in the card. Author lore and other card fields remain. No separate Save step is needed; our API keys and connection settings are not included.
 
-On the receiving device, import the card and its author lorebook, open the intended chat, then choose **Read memory from card**. This explicitly replaces that chat's WorldMemory state, like Import backup. **Export the ongoing ST chat separately** to retain its current dialogue and raw tail. Imported chats that already contain memory need no second restore. Card snapshots update only when requested, with no model calls or automatic overwrite.
+Import **that one PNG** on a device with WorldMemory0.5.2+ and open the character. A fresh empty chat automatically resumes the embedded conversation, memory and WI. Existing nonempty chats are preserved; restored lore goes into a separate native book. Full game cards need no separate chat or backup-file import. **Save memory to card / Read memory from card** and standalone JSON backups remain available as manual memory tools; older snapshots without embedded `chat` restore memory only. Transfer makes no model requests.
 
 ## Preview limits
 

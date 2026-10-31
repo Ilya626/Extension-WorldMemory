@@ -33,7 +33,8 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         return current && prepared.key === key(current) ? prepared.text || '' : ''; };
     const injection = installHistoryInjection({ ctx, settings, getText, onPromptSize: info => {
         const output = document.getElementById('wm_prompt_size');
-        if (output) output.textContent = `Full prompt estimate: ${info.tokens ?? info.tokenCount ?? '?'} tokens (${info.estimator}). Target: ${settings().promptTargetTokens || 24000}. Provider usage may differ.`;
+        if (output) output.textContent = `Last full prompt estimate: ${info.tokens ?? info.tokenCount ?? '?'} tokens (${info.estimator}). Context target excludes protected exchanges. Provider usage may differ.`;
+        void ctx().eventSource?.emit('worldmemory:prompt-size', info);
     } });
     function invalidate() { serial++; controller?.abort(); prepared = null; injection.clear(); }
     function syncHints(enabled = false) {
