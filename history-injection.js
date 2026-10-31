@@ -3,6 +3,7 @@
  * (updateInjection/placeMemoryBeforeChat/placeTextMemoryBeforeChat), AGPL-3.0.
  * See vendor/summaryception/LICENSE. The caller supplies selected history only.
  */
+import { countPromptTokens, tokenCounterStatus } from './token-counter.js';
 const PROMPT_KEY = 'world_memory_history';
 const MEMORY_START = '<world_memory_story_memory>';
 const MEMORY_END = '</world_memory_story_memory>';
@@ -112,12 +113,10 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize }
         try {
             // Use the same message framing as native CC. Counting a serialized
             // messages array as one text prompt adds a second JSON wrapper.
-            const count = format === 'chat'
-                ? await (await import('/scripts/tokenizers.js')).countTokensOpenAIAsync(prompt)
-                : await current.getTokenCountAsync?.(text, 0);
+            const count = await countPromptTokens(prompt, current);
             if (Number.isFinite(count) && (count > 0 || !text.length)) {
                 tokens = count;
-                estimator = format === 'chat' ? 'native ST chat counter; may use fallback' : 'ST text counter; may use fallback';
+                estimator = tokenCounterStatus(current).estimator;
             }
         } catch { /* Informational measurement must not stop generation. */ }
         const serializedChat = format === 'chat' && tokens === undefined;

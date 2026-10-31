@@ -6,11 +6,12 @@ import { storySpineCells } from './story-spine.js';
 import { rerankStoryCandidates } from './history-spine-rerank.js';
 import { installHistoryInjection } from './history-injection.js';
 import { semanticWIQuery } from './semantic-wi-runtime.js';
+import { countTextTokens, prepareTokenCounter, tokenCounterKey, tokenCounterStatus } from './token-counter.js';
 
 const REGEX_ID = 'world-memory-service-hint';
 export function installHistory({ ctx, settings, state, saveState, status, bridge }) {
     let prepared = null, serial = 0, controller = null;
-    const countTokens = text => ctx().getTokenCountAsync(text, 0);
+    const countTokens = text => countTextTokens(text, ctx());
     const embeddings = createEmbeddingVectorClient({ ctx,
         getConfig: () => ({ mode: settings().historyEmbeddingMode || 'api', api: settings().historyEmbeddingAPI || {},
             local: settings().historyEmbeddingLocal || {}, contentRevision: HISTORY_VECTOR_CONTENT_REVISION }), getSummaryConfig: settings });
@@ -20,7 +21,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         try { nativeFlags = [globalThis.sessionStorage?.getItem('tokenizationWarningShown'),
             globalThis.sessionStorage?.getItem('tokenizationSupported')]; } catch { /* Storage may be unavailable. */ }
         return JSON.stringify([c.mainApi, c.powerUserSettings?.tokenizer, c.powerUserSettings?.token_padding,
-            c.getTokenizerModel?.(), c.onlineStatus, nativeFlags]);
+            c.getTokenizerModel?.(), c.onlineStatus, nativeFlags, tokenCounterKey(c)]);
     };
     let chunkTokenizer = tokenizerKey();
     const snapshot = () => bridge()?.snapshot?.();
@@ -62,6 +63,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     async function prepare(processedChat, _size, _abort, type) {
         injection.capture(processedChat); syncHints(type !== 'quiet');
         if (!settings().enabled || settings().injectionPosition === -1 || type === 'quiet' || !snapshot()) { invalidate(); return; }
+        await prepareTokenCounter(ctx());
         if (chunkTokenizer !== tokenizerKey()) {
             // Keep reusable vectors; only the token-counted window boundaries
             // belong to the old game tokenizer/model.
@@ -123,7 +125,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
                 blocks: assembled.blocks, baselineTokens: assembled.baselineTokens, spineInfo: assembled.spineInfo,
                 warning: assembled.warning, diagnostics };
-            if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated ST tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, assembled.warning, warning].filter(Boolean).join(' ');
+            if (output) output.textContent = [assembled.reason || `Recovered history: ${assembled.tokens} estimated tokens; soft target ${assembled.targetTokens}. Raw tail is separate.`, tokenCounterStatus(ctx()).warning, assembled.warning, warning].filter(Boolean).join(' ');
             injection.refresh();
         } catch (error) {
             if (run !== serial || ctx().chatMetadata !== metadata) return;

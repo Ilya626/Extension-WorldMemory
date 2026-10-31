@@ -10,6 +10,7 @@ import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
+import { countTextTokens, tokenCounterStatus } from './token-counter.js';
 
 const CONTINUITY = `The previous_l0 (or prior_context) is the COMPLETE immediately preceding saved L0, supplied as continuity context and a style example. Continue its narrative thread with the new source packet. Preserve necessary referents and unresolved conditions without recopying the whole previous summary. For the first packet there is no previous L0.
 Only new_sources (or passage_in_question) are witnesses for this packet's new events, search excerpts and WI contributions. previous_l0 is a saved account, not an additional source handle or independent proof. Do not turn its claims into newly observed events. Preserve thoughts versus speech, plans versus outcomes, attribution, identity and limiting conditions. Do not continue the roleplay.`;
@@ -25,8 +26,10 @@ const unique = values => [...new Set(values)];
 
 export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, status = () => {},
     afterSave, prepareReferences, prepareKnowledge, refreshInjection: onRefreshInjection, onBusyChange = () => {},
-    sendRequest = sendSummarizerRequest } = {}) {
+    onRequest = () => {}, sendRequest = sendSummarizerRequest } = {}) {
     let job = null, timer = null, generationActive = false, historyProvider = null;
+    let requestTrace = [];
+    const notifyRequest = () => { try { onRequest(); } catch (error) { console.warn('[WorldMemory] Request display unavailable.', error); } };
     let nativeIsGenerating = null;
     const nativeReady = import('/script.js').then(native => { nativeIsGenerating = native.isGenerating; })
         .catch(error => console.warn('[World Memory] Native generation state unavailable; using context/events.', error));
@@ -105,6 +108,13 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         guard(owner);
         const selected = { ...config() };
         if (Number(options.responseTokens) > 0) for (const key of ['summarizerResponseLength', 'openaiMaxTokens', 'ollamaMaxTokens']) selected[key] = Number(options.responseTokens);
+        const trace = { id: crypto.randomUUID(), stage: options.stage || 'legacy-wi', startedAt: Date.now(),
+            status: 'sending', systemPrompt, userPrompt: prompt, connection: selected.connectionSource || 'default',
+            model: selected.connectionSource === 'openai' ? selected.openaiModel : selected.connectionSource === 'ollama' ? selected.ollamaModel : null,
+            responseTokens: selected.summarizerResponseLength || (selected.connectionSource === 'openai' ? selected.openaiMaxTokens
+                : selected.connectionSource === 'ollama' ? selected.ollamaMaxTokens : 0) || 0 };
+        requestTrace = [...requestTrace.filter(item => item.metadata === owner.metadata), { metadata: owner.metadata, trace }].slice(-2);
+        notifyRequest();
         let idle;
         const activity = () => {
             clearTimeout(idle);
@@ -115,8 +125,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         try {
             const result = await wait(sendRequest(selected, systemPrompt, prompt,
                 { signal: owner.controller.signal, returnDetails: true, onActivity: activity }), owner);
-            guard(owner); return { ...result, text: clean(result.text || '') };
-        } finally { clearTimeout(idle); }
+            guard(owner); trace.status = 'complete'; return { ...result, text: clean(result.text || '') };
+        } catch (error) { trace.status = 'error'; throw error; }
+        finally { clearTimeout(idle); notifyRequest(); }
     }
     const view = archive => ({ layers: [readArchive(archive)],
         legacySourceIds: unique(Object.values(archive.legacy || {}).flatMap(store => store.legacySourceIds || [])),
@@ -175,6 +186,26 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         }
         return language ? `Write memory prose, story_spine, Lprime and search keys in ${language}. Exact source excerpts remain verbatim.` : 'Follow the new sources language; preserve exact source excerpts verbatim.';
     }
+    function l0System() {
+        return [config().summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
+            'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
+            STORY_SPINE_INSTRUCTION].join('\n\n');
+    }
+    function metadataSystem(wiSystemPrompt, knowledgeActive = false) {
+        return [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wiSystemPrompt,
+            knowledgeActive ? `${AWARENESS_INSTRUCTION.replace('Optionally return', 'Return')}\nFor this enabled information-event preparation, include the awareness array in the same metadata object. Return awareness: [] if no supported events qualify; do not omit the field.` : null,
+            'This is stage 2. The saved L0 prose is immutable and is a draft navigation aid, not independent proof. Return ONLY one <memory_metadata> JSON block, with no L0 prose. Search excerpts and this packet\'s WI contributions must be supported by the supplied new_sources, not by the saved L0 or retained prior references. With no original sources use saved_summary only for Lprime, return facts: [], and omit WI claims.'].filter(Boolean).join('\n\n');
+    }
+    function spineSystem() {
+        return [STORY_SPINE_INSTRUCTION, MEMORY_ROLES, languageInstruction(),
+            'BACKFILL OUTPUT OVERRIDE: return ONLY the <story_spine>{"text":"short packet outline"}</story_spine> block. Read only the saved L0 below; do not output or rewrite it. Its source membership is assigned by code, not inferred by you. Preserve its uncertainty and do not invent original chat evidence.'].join('\n\n');
+    }
+    function inspectPrompts({ wiSystemPrompt = null, knowledgeActive = false } = {}) {
+        const s = config();
+        return { baseSystem: s.summarizerSystemPrompt || DEFAULT_SYSTEM, userTemplate: s.summarizerUserPrompt || DEFAULT_USER,
+            l0System: l0System(), metadataSystem: metadataSystem(wiSystemPrompt, knowledgeActive), spineSystem: spineSystem(),
+            requests: requestTrace.filter(item => item.metadata === ctx().chatMetadata).map(item => structuredClone(item.trace)) };
+    }
     async function references(owner, sources, existingSummary, packetId) {
         if (!sources.length || !prepareReferences) return null;
         try {
@@ -189,9 +220,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     async function generateL0(owner, sources, previous, { existing = null } = {}) {
         const localSources = storySpineSources(sources, { wholeSources: true }), s = config();
         guard(owner); checkPrevious(previous);
-        const system = [s.summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
-            'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
-            STORY_SPINE_INSTRUCTION].join('\n\n');
+        const system = l0System();
         const story = localSources.map(source => `[${source.handle}] (message ${source.message}) ${source.name}: ${source.text}`).join('\n\n');
         const template = s.summarizerUserPrompt || DEFAULT_USER;
         let prompt = template.replaceAll('{{player_name}}', () => ctx().name1 || 'User')
@@ -209,7 +238,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             guard(owner); prompt = attachSummaryWorldInfo(prompt, info);
         }
         status('Stage 1: waiting for L0 and its story skeleton. Stop cancels the request.');
-        const response = await transport(owner, system, prompt);
+        const response = await transport(owner, system, prompt, { stage: existing === null ? 'l0' : 'refine-l0' });
         guard(owner); checkPrevious(previous); checkSources(owner, sources);
         // A provider's unsolicited service tail must not become L0 prose.
         const parsedSpine = readStorySpine(response.text, localSources);
@@ -226,14 +255,13 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         if (Number.isFinite(detail.tokenCount)) {
             detail.responseTokenCount = detail.tokenCount; detail.responseTokenCountSource = detail.tokenCountSource;
         }
-        const count = ctx().getTokenCountAsync;
         detail.tokenCount = Math.max(1, Math.ceil(text.length / 4));
         detail.tokenCountSource = 'estimated: characters / 4';
-        if (typeof count === 'function') try {
-            const estimate = await count(text, 0);
+        try {
+            const estimate = await countTextTokens(text, ctx());
             if (Number.isFinite(estimate) && estimate > 0) {
                 detail.tokenCount = estimate;
-                detail.tokenCountSource = 'estimated: ST text counter; may use fallback';
+                detail.tokenCountSource = `estimated: ${tokenCounterStatus(ctx()).estimator}`;
             }
         } catch { /* A display estimate must not discard completed L0 prose. */ }
         guard(owner); return detail;
@@ -249,9 +277,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (config().knowledgeBoundaries && sources.length && prepareKnowledge) try {
                 knowledge = await wait(Promise.resolve(prepareKnowledge({ before: Math.min(...sources.map(source => source.index)) })), owner); guard(owner);
             } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Saved L0 and ordinary metadata are kept.`); }
-            const system = [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wi?.systemPrompt,
-                knowledge?.knowledge_characters?.length ? `${AWARENESS_INSTRUCTION.replace('Optionally return', 'Return')}\nFor this enabled information-event preparation, include the awareness array in the same metadata object. Return awareness: [] if no supported events qualify; do not omit the field.` : null,
-                'This is stage 2. The saved L0 prose is immutable and is a draft navigation aid, not independent proof. Return ONLY one <memory_metadata> JSON block, with no L0 prose. Search excerpts and this packet\'s WI contributions must be supported by the supplied new_sources, not by the saved L0 or retained prior references. With no original sources use saved_summary only for Lprime, return facts: [], and omit WI claims.'].filter(Boolean).join('\n\n');
+            const system = metadataSystem(wi?.systemPrompt, Boolean(knowledge?.knowledge_characters?.length));
             const prompt = JSON.stringify({ task: 'Annotate this already saved L0. Do not regenerate or rewrite its prose.',
                 saved_summary: record.text, source_status: sources.length ? 'linked' : 'summary-only',
                 new_sources: localSources.map(source => ({ handle: source.handle, name: source.name, text: source.text })),
@@ -259,7 +285,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 ...(knowledge?.knowledge_characters?.length ? { knowledge_context: {
                     knowledge_characters: knowledge.knowledge_characters, known_topics: knowledge.known_topics || [] } } : {}) });
             status('Stage 2: preparing search metadata and WI for saved L0.');
-            const response = await transport(owner, system, prompt, options);
+            const response = await transport(owner, system, prompt, { ...options, stage: 'metadata' });
             guard(owner); if (sources.length) checkSources(owner, sources);
             if (JSON.stringify(readPacket(owner.archive, record.id)) !== before) throw new Error('Saved L0 changed during annotation. Response not applied.');
             const parsed = readMemoryMetadata(response.text, localSources, { backfill: true, extractiveFacts: true });
@@ -425,10 +451,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 const cells = storySpineSources(linked ? sources : [{ id: record.id,
                     name: 'Earliest saved summary; original messages unavailable', text: record.text }], { summaryOnly: !linked, wholeSources: true });
                 options.onProgress?.({ ...result, packetId: packet.id, sourceStatus: linked ? 'linked' : 'summary-only' });
-                const system = [STORY_SPINE_INSTRUCTION, MEMORY_ROLES, languageInstruction(),
-                    'BACKFILL OUTPUT OVERRIDE: return ONLY the <story_spine>{"text":"short packet outline"}</story_spine> block. Read only the saved L0 below; do not output or rewrite it. Its source membership is assigned by code, not inferred by you. Preserve its uncertainty and do not invent original chat evidence.'].join('\n\n');
+                const system = spineSystem();
                 const response = await transport(owner, system, JSON.stringify({ task: 'Build the missing story skeleton only.',
-                    saved_summary: record.text, source_status: linked ? 'linked' : 'summary-only' }), options);
+                    saved_summary: record.text, source_status: linked ? 'linked' : 'summary-only' }), { ...options, stage: 'story-spine' });
                 guard(owner); if (linked) checkSources(owner, sources);
                 if (JSON.stringify(readPacket(owner.archive, packet.id)) !== before) throw new Error('Saved L0 changed during skeleton preparation. Response not applied.');
                 const parsed = readStorySpine(response.text, cells, { backfill: true, savedText: record.text });
@@ -453,9 +478,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const value = String(text).trim();
             if (!value) throw new Error('Memory text is empty. Use Delete to remove the record.');
             if (value === record.text) return record;
-            const tokenCount = await wait(owner.context.getTokenCountAsync(value, 0), owner);
+            const tokenCount = await wait(countTextTokens(value, owner.context), owner);
             guard(owner);
-            putPacket(owner.archive, { ...record, text: value, tokenCount, tokenCountSource: 'estimated: ST text counter; may use fallback', manual: true,
+            putPacket(owner.archive, { ...record, text: value, tokenCount, tokenCountSource: `estimated: ${tokenCounterStatus(owner.context).estimator}`, manual: true,
                 tokenCountOrigin: 'manual-tokenizer', memoryMetadata: null, annotationStatus: 'pending', annotationError: null,
                 storySpine: null, storySpineError: 'Saved L0 text was edited. Manual text remains authoritative.' });
             await persist(owner, 'edited', id);
@@ -510,14 +535,14 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     });
     listen(events.GENERATION_ENDED, () => { generationActive = false; schedule(); onBusyChange(); });
     listen(events.GENERATION_STOPPED, () => { generationActive = false; stop(); onBusyChange(); });
-    listen(events.CHAT_CHANGED, () => { generationActive = false; stop(new Error('Chat changed. Already saved packets were kept.')); refreshInjection(); });
+    listen(events.CHAT_CHANGED, () => { generationActive = false; requestTrace = []; stop(new Error('Chat changed. Already saved packets were kept.')); refreshInjection(); });
     for (const event of [events.MESSAGE_EDITED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED].filter(Boolean)) listen(event, async () => {
         stop(new Error('Chat sources changed. Already saved packets were kept.')); refreshInjection();
         try { await restoreStaleSources(); }
         catch (error) { status(error.message); }
         status('Chat sources changed. Regenerate affected saved L0 packets; original archive records remain available.');
     });
-    return Object.freeze({ version: 'archive-v1', protocol: 1, snapshot, isBusy, historyText, refreshInjection,
+    return Object.freeze({ version: 'archive-v1', protocol: 1, snapshot, isBusy, historyText, refreshInjection, inspectPrompts,
         setHistoryProvider(provider) { historyProvider = typeof provider === 'function' ? provider : null; },
         request: (system, prompt, options = {}) => run(owner => transport(owner, system, prompt, options), options),
         backfillMemoryMetadata, backfillStorySpine, summarizeNow, regenerate: id => rewrite(id, false), refine: id => rewrite(id, true), edit, remove, stop, restoreStaleSources });

@@ -7,6 +7,8 @@ import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history
 import { contextPolicy, recommendContextBudget, contextStatistics } from './context-budget.js';
 import { planRawContext, blindZoneStart } from './vendor/summaryception/raw-context.js';
 import { installArchiveRuntime } from './archive-runtime.js';
+import { SUMMARY_PROMPT_KEYS, copyLegacyPrompt, rememberPromptOrigin, describePromptOrigin, resetSummaryPrompts } from './summary-prompt-settings.js';
+import { countTextTokens, tokenCounterStatus } from './token-counter.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
@@ -31,6 +33,7 @@ let nativeReferenceScope = null;
 let restoringCardGame = false, cardExportPass = null;
 let cardRestoreTimer = null;
 let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nativePromptSize = null, wiSize = null, wiMeasurementSerial = 0;
+let lastNativeWIScan = null;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
 const status = text => { const node = document.getElementById('wm_status'); if (node) node.textContent = text; renderBusy(); };
@@ -49,7 +52,8 @@ const settings = () => {
             'openaiUrl','openaiKey','openaiModel','openaiMaxTokens','ollamaUrl','ollamaModel','ollamaMaxTokens','summaryLanguage','summaryCustomLanguage',
             'summarizerWorldInfo','summarizerWorldInfoPercent','summarizerSystemPrompt','summarizerUserPrompt','stripPatterns',
             'injectionPosition','injectionDepth','injectionRole','injectionScan','injectionTemplate']) {
-            if (value[key] === undefined && previous[key] !== undefined) value[key] = structuredClone(previous[key]);
+            if (SUMMARY_PROMPT_KEYS.includes(key)) copyLegacyPrompt(value, previous, key);
+            else if (value[key] === undefined && previous[key] !== undefined) value[key] = structuredClone(previous[key]);
         }
         value.historyMaxTokens ??= value.historyBaseTokens !== undefined || value.historyZoomTokens !== undefined
             ? (Number(value.historyBaseTokens) || 4000) + (Number(value.historyZoomTokens) || 4000) : defaults.historyMaxTokens;
@@ -112,7 +116,7 @@ async function claimArchiveRuntime() {
     await extensions.disableExtension(previous.name);
     return true;
 }
-const tokens = text => ctx().getTokenCountAsync(text, 0);
+const tokens = text => countTextTokens(text, ctx());
 const names = value => [...new Set(value.split(/\r?\n/).map(name => name.trim()).filter(Boolean))];
 function unchanged(metadata) {
     controller?.signal.throwIfAborted();
@@ -652,7 +656,7 @@ function schedule() {
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
     $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
-    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
+    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
 function button(text, callback) {
@@ -695,8 +699,8 @@ async function renderArchive() {
             finally { await renderArchive(); renderBusy(); }
         });
         actions.append(action('Save text', () => archiveRuntime.edit(record.id, text.value)),
-            action('Regenerate', () => archiveRuntime.regenerate(record.id)),
-            action('Refine', () => archiveRuntime.refine(record.id)),
+            action('Regenerate · 2 calls', () => archiveRuntime.regenerate(record.id)),
+            action('Refine · 2 calls', () => archiveRuntime.refine(record.id)),
             action('Rebuild search notes / WI', () => archiveRuntime.backfillMemoryMetadata({ packetId: record.id, force: true })),
             action('Delete', () => archiveRuntime.remove(record.id)));
         if (!record.manual && !record.stale) actions.append(action(record.storySpine ? 'Rebuild story skeleton' : 'Prepare story skeleton',
@@ -727,6 +731,10 @@ function renderWIStatus() {
         : scan?.status === 'indexing' ? `Preparing WI embeddings: ${scan.completed} / ${scan.total}. Unchanged entries are reused.`
         : scan?.status === 'ready' ? `Last WI scan: ${scan.selected.length} semantic candidates. Native entry rules still apply.`
             : scan?.reason ? `Embedding search was unavailable${scan.error ? ': ' + scan.error : ''}. Native keywords remain active.` : 'Semantic WI will be prepared during the next WI scan.';
+    if (lastNativeWIScan?.metadata === ctx().chatMetadata) {
+        const entries = lastNativeWIScan.entries;
+        output.textContent += ` Последний игровой скан ST выбрал ${entries.length}: ${entries.map(entry => `${entry.title || `#${entry.uid}`} (${entry.constant ? 'Constant' : 'условия ST'})`).join('; ') || 'нет записей'}. Это результат сканирования, не подтверждение доставки после окончательной обрезки ST.`;
+    }
 }
 function applyNativeWIBudget() {
     const s = settings(); if (!s.enabled) return;
@@ -758,10 +766,10 @@ async function renderContextStatistics(run) {
         if (!current()) return;
         const protectedText = context.chat.slice(blindZoneStart(context.chat, s)).filter(message => !message.is_system)
             .map(message => `${message.name || (message.is_user ? 'User' : 'Assistant')}: ${message.mes}`).join('\n');
-        protectedTokens = protectedText ? await context.getTokenCountAsync(protectedText, 0) : 0;
+        protectedTokens = protectedText ? await countTextTokens(protectedText, context) : 0;
         const prepared = history.inspect();
         selected = prepared || await selectHistory(archiveHistoryNodes(view), [], { storyNodes: archiveStoryNodes(view),
-            targetTokens: s.historyMaxTokens, countTokens: text => context.getTokenCountAsync(text, 0),
+            targetTokens: s.historyMaxTokens, countTokens: text => countTextTokens(text, context),
             format: text => (s.injectionTemplate || '{{summary}}').replace('{{summary}}', () => text) });
     }
     if (!current()) return;
@@ -783,6 +791,11 @@ async function renderContextStatistics(run) {
     document.getElementById('wm_context_breakdown').replaceChildren(...lines.map(text => {
         const line = document.createElement('div'); line.textContent = text; return line;
     }));
+    const counter = tokenCounterStatus(context);
+    const counterLabel = counter.mode === 'o200k' ? 'локальный o200k: штатный токенизатор недоступен'
+        : counter.mode === 'approx' ? 'грубая оценка по длине: локальные токенизаторы недоступны'
+            : counter.mode === 'pending' ? 'проверяется' : counter.nativeVerified ? `штатный ${counter.model}, token IDs проверены` : 'счётчик ST';
+    document.getElementById('wm_token_counter_status').textContent = `Счётчик WorldMemory: ${counterLabel}. Это оценка, не usage провайдера. Внутреннее обрезание и WI-сканирование ST используют свой счётчик и могут отличаться.`;
 }
 function renderHistoryPlacement(s = settings()) {
     const insideHistory = s.injectionPosition === 1 && s.injectionDepth !== 0;
@@ -793,6 +806,34 @@ function renderHistoryPlacement(s = settings()) {
     document.getElementById('wm_injection_depth').disabled = !insideHistory;
     document.getElementById('wm_injection_role').disabled = s.injectionPosition !== 0 && s.injectionPosition !== 1;
     document.getElementById('wm_injection_scan').disabled = s.injectionPosition === -1;
+}
+function renderSummaryPrompts() {
+    if (!archiveRuntime?.inspectPrompts || !document.getElementById('wm_prompt_preview')) return;
+    const s = settings(), view = archiveRuntime.inspectPrompts({ wiSystemPrompt: s.auto ? SUMMARY_WI_SYSTEM : null,
+        knowledgeActive: Boolean(s.knowledgeBoundaries) });
+    for (const [id, key, effective] of [['wm_summary_system_prompt', 'summarizerSystemPrompt', view.baseSystem],
+        ['wm_summary_user_prompt', 'summarizerUserPrompt', view.userTemplate]]) {
+        const field = document.getElementById(id);
+        if (document.activeElement !== field) field.value = effective;
+        document.getElementById(`${id}_source`).textContent = describePromptOrigin(key, s, ctx().extensionSettings.summaryception);
+    }
+    const choice = document.getElementById('wm_prompt_preview_stage').value;
+    document.getElementById('wm_prompt_preview').value = view[choice] || view.l0System;
+    const select = document.getElementById('wm_prompt_request'), previous = select.value;
+    const labels = { l0: 'Этап 1 · L0 + L″', 'refine-l0': 'Этап 1 · Refine L0 + L″', metadata: 'Этап 2 · L′ / поиск / WI',
+        'story-spine': 'Подготовка L″', 'legacy-wi': 'Отдельный legacy WI' };
+    const states = { sending: 'отправляется', complete: 'ответ получен', error: 'ошибка/остановлен' };
+    select.replaceChildren(...view.requests.map(request => new Option(
+        `${new Date(request.startedAt).toLocaleTimeString()} · ${labels[request.stage] || request.stage} · ${states[request.status]}`, request.id)));
+    if (view.requests.some(request => request.id === previous)) select.value = previous;
+    else if (view.requests.length) select.value = view.requests.at(-1).id;
+    const request = view.requests.find(request => request.id === select.value);
+    select.disabled = !request;
+    document.getElementById('wm_prompt_request_info').textContent = request
+        ? `${labels[request.stage] || request.stage} · connection: ${request.connection} · model: ${request.model || 'из текущего подключения/профиля ST'} · output: ${request.responseTokens || 'наследуется'}. Это тексты, переданные транспорту WorldMemory; пресет ST и провайдер могут дополнительно преобразовать запрос.`
+        : 'Запросов в этой вкладке для открытого чата пока нет. Здесь появятся последние два; после перезагрузки история очищается. Без подключения к API можно смотреть шаблоны выше.';
+    document.getElementById('wm_prompt_sent_system').value = request?.systemPrompt || '';
+    document.getElementById('wm_prompt_sent_user').value = request?.userPrompt || '';
 }
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
@@ -841,6 +882,7 @@ async function render() {
         else control.value = s[control.dataset.setting] ?? '';
     }
     renderHistoryPlacement(s);
+    renderSummaryPrompts();
     for (const group of document.querySelectorAll('[data-connection]')) group.hidden = group.dataset.connection !== s.connectionSource;
     document.getElementById('wm_embedding_mode').value = s.historyEmbeddingMode === 'local' ? 'local' : 'api';
     document.getElementById('wm_embedding_mode').disabled = !(s.historySemantic || s.wiSemantic);
@@ -1215,7 +1257,7 @@ async function init() {
     archiveRuntime = installArchiveRuntime({ ctx,
         settings: () => ({ ...settings(), archiveAuto: !busy && settings().archiveAuto !== false }), getArchive, saveArchive, status,
         prepareReferences: prepareSummaryContext, prepareKnowledge: options => knowledgeRuntime?.context(options),
-        refreshInjection: () => history?.refresh(), onBusyChange: renderBusy,
+        refreshInjection: () => history?.refresh(), onBusyChange: renderBusy, onRequest: renderSummaryPrompts,
         afterSave: async () => { history?.changed(); await update(false); await renderArchive(); } });
     history = installHistory({ ctx, settings, state, saveState, status, bridge });
     semanticWI = createSemanticWIRuntime({ ctx, settings, embeddings: history.embeddings,
@@ -1282,6 +1324,7 @@ async function init() {
             if (control.tagName === 'SELECT' && typeof defaults[control.dataset.setting] === 'number') value = Number(value);
             if (control.id === 'wm_injection_depth' && settings().injectionDepth > 0) settings().injectionInsideDepth = settings().injectionDepth;
             settings()[control.dataset.setting] = value;
+            if (SUMMARY_PROMPT_KEYS.includes(control.dataset.setting)) rememberPromptOrigin(settings(), control.dataset.setting);
             void applySettings({ nativeWIBudget: ['wiActivationTokens', 'wiActivationUnlimited'].includes(control.dataset.setting) }).catch(error => status(error.message));
         });
     }
@@ -1298,6 +1341,13 @@ async function init() {
         status('Main character names saved. They are tracked in the next L0 request; Update legacy WI can refresh older profiles.');
     });
     $('#wm_update').on('click', () => { void update(true); });
+    $('#wm_prompt_preview_stage, #wm_prompt_request').on('change', renderSummaryPrompts);
+    $('#wm_reset_summary_prompts').on('click', () => {
+        if (busy || archiveRuntime.isBusy()) return;
+        resetSummaryPrompts(settings());
+        ctx().saveSettingsDebounced(); renderSummaryPrompts();
+        status('Stage 1 now uses the displayed built-in WorldMemory prompts. Stage 2 was not changed.');
+    });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
     $('#wm_backfill_metadata').on('click', () => { void backfillMetadata(); });
     $('#wm_backfill_spine').on('click', () => { void backfillSpine(); });
@@ -1331,10 +1381,12 @@ async function init() {
     // Runs before RussianWI's normal listener, so it can expand the new ordinary keys too.
     ctx().eventSource.makeFirst(events.WORLDINFO_ENTRIES_LOADED, injectBook);
     ctx().eventSource.on(events.WORLDINFO_SCAN_DONE, async args => {
-        renderWIStatus();
         if (args?.state?.next || getSummaryWorldInfoSources() || nativeReferenceScope) return;
+        lastNativeWIScan = { metadata: ctx().chatMetadata, entries: [...(args?.activated?.entries?.values?.() || [])]
+            .map(entry => ({ uid: entry.uid, title: entry.comment, world: entry.world, constant: entry.constant })) };
+        renderWIStatus();
         const metadata = ctx().chatMetadata, text = args?.activated?.text || '', measurement = wiMeasurementSerial;
-        const measured = text ? await ctx().getTokenCountAsync(text, 0) : 0;
+        const measured = text ? await countTextTokens(text, ctx()) : 0;
         if (ctx().chatMetadata === metadata && measurement === wiMeasurementSerial && !getSummaryWorldInfoSources() && !nativeReferenceScope) {
             wiSize = { metadata, tokens: measured }; scheduleContextStatistics();
         }
@@ -1361,7 +1413,7 @@ async function init() {
         if (!await restoreEmbeddedCardGame()) status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
     } catch (error) { cardRestoreError(error); }
     globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
-        archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow,
+        archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow, inspectSummaryPrompts: () => archiveRuntime.inspectPrompts(),
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),
         prepareHistory: prepareContext, inspectHistory: () => history.inspect(), inspectSemanticWI: () => semanticWI.inspect(),
         inspectKnowledge: () => knowledgeRuntime.inspect(), inspectContextBudget: () => lastContextStatistics ? structuredClone(lastContextStatistics) : null,

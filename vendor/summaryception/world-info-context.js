@@ -1,4 +1,5 @@
 /** Use ST's own matching, books, recursion, probability, groups and WI budget. */
+import { countTextTokens } from '../../token-counter.js';
 let scanning = false;
 let sourceScope = null;
 let sourceSignal;
@@ -127,7 +128,7 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
                 if (seen.has(entry.id)) continue;
                 seen.add(entry.id);
                 const candidate = [...selected, entry.text].join('\n\n');
-                const nextTokens = await context.getTokenCountAsync(attachSummaryWorldInfo('', candidate), 0);
+                const nextTokens = await countTextTokens(attachSummaryWorldInfo('', candidate), context);
                 checkCurrent();
                 if (nextTokens > options.maxTokens) { omitted++; continue; }
                 selected.push(entry.text); tokens = nextTokens;

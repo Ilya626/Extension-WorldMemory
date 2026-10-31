@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.3 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.4 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 ## Start with the recommended setup
 
@@ -222,6 +222,10 @@ For an existing Summaryception setup, WorldMemory imports the saved archive and 
 Import **that one PNG** on a device with WorldMemory0.5.2+ and open the character. A fresh empty chat automatically resumes the embedded conversation, memory and WI. Existing nonempty chats are preserved; restored lore goes into a separate native book. Full game cards need no separate chat or backup-file import. **Save memory to card / Read memory from card** and standalone JSON backups remain available as manual memory tools; older snapshots without embedded `chat` restore memory only. Transfer makes no model requests.
 
 ## Preview limits
+
+**Inspect the instructions:** open **Summarizer connection → Instructions**. The stage-1 fields show the effective editable base and its origin. Full system previews include code-added continuity, language and output rules. Stage 2 has separate built-in instructions. The last two transport requests show the exact system/user pairs; these traces stay only in the current tab, not in card exports. Native ST/provider transformations can still change the final wire payload. Regenerate/Refine normally make two calls: save L0/L″, then prepare search notes/WI.
+
+**Token counts:** the context panel identifies the active counter. Real local token IDs are checked; missing Gemini/Gemma or Claude tokenizer assets can make native ST silently use a byte heuristic. WorldMemory then uses an explicitly labelled local o200k estimate. Gemini/Gemma and legacy Claude remain proxies for provider accounting. Native ST trimming and WI scanning retain their own counter/cache and can still differ. C is a planning reference: unused WI/history allowances and trigger headroom do not automatically fill the outgoing request.
 
 **Empty chat after importing a game card?** Reload the ST page after updating through the extension manager, then reopen the imported character. The WorldMemory panel header shows the loaded runtime version: it should be **0.5.3** or newer. The installed version in the manager alone does not show what the open page is running. The panel shows embedded messages/L0 and current messages. **Restore game from card** saves the current chat and opens the whole embedded game as a separate chat. **Read memory from card** imports memory only. Transfer the original PNG as a file, not as a compressed photo.
 

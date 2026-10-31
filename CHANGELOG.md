@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4 — 2026-11-01 — effective prompts and tokenizer health
+
+- Display effective stage-1 system base/user template, their recorded origin and an explicit reset. Migrated Summaryception prompts remain visible and editable; old unstamped origins are not guessed from a text match.
+- Preview complete systems for L0/L″, search/WI and outline backfill using the same builders as production. Display the last two system/user pairs actually passed to the transport for the current chat, in tab memory only. Show that Regenerate/Refine normally make two requests, while applying saved WI makes none.
+- Validate the local ST tokenizer with real token IDs. Use a labelled local o200k approximation when Gemini/Gemma or Claude assets are unavailable; apply one scale to archive/source counting, retention, recovery and WorldMemory measurements. Keep provider usage distinct. Native ST trimming and WI scanning still use ST's own counter/cache; the panel warns about this boundary.
+- Display the last native gameplay WI scan separately from optional semantic search. Scan selection is not labelled as proof of final delivery.
+- Two approved checks cover exact transmitted stage prompts and migration/edit/reset behavior. Native checks capture both local summary requests and a normal gameplay payload before provider dispatch; no paid model calls are required for those checks.
+
 ## 0.5.3 — 2026-10-31 — visible card-game recovery
 
 - Show the loaded runtime version in the panel header. Reload ST and reopen the character after updating files through the extension manager.

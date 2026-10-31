@@ -1,6 +1,7 @@
 import { collectPassage, pendingSourceIds, sourceId } from './summary-sources.js';
 import { getModelOutputIssue } from './output-validation.js';
 import { summaryDecision } from '../../context-budget.js';
+import { countTextTokens, tokenCounterStatus } from '../../token-counter.js';
 
 const positive = (value, fallback) => Math.max(1, Math.floor(Number(value) || fallback));
 
@@ -32,9 +33,9 @@ export function blindZoneStart(chat, settings) {
 
 async function measure(text) {
     const ctx = SillyTavern.getContext();
-    const count = typeof ctx.getTokenCountAsync === 'function' ? await ctx.getTokenCountAsync(text) : Math.ceil(text.length / 4);
+    const count = await countTextTokens(text, ctx);
     return { tokens: Math.max(1, Number(count) || 1),
-        estimated: typeof ctx.getTokenCountAsync !== 'function' };
+        estimated: true, estimator: tokenCounterStatus(ctx).estimator };
 }
 
 /** Blind exchanges are removed before tokenization, retention and batching. */

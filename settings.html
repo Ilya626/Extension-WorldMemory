@@ -13,6 +13,7 @@
         <h4 id="wm_context_heading">Context budget · Бюджет контекста</h4>
         <div class="wm-field wm-context-target"><label for="wm_prompt_target">Desired context (tokens) · Желаемый контекст</label><input id="wm_prompt_target" data-setting="promptTargetTokens" class="text_pole" type="number" min="1" step="1000" aria-describedby="wm_context_help"></div>
         <small id="wm_context_help" class="wm-muted">Цель для рекомендаций, не жёсткий предел. Защищённые обмены P идут сверх неё. Ручные значения не уменьшаются сами. Окно модели и резерв ответа задаются отдельно в ST и должны вмещать ваш план + P.</small>
+        <small id="wm_token_counter_status" class="wm-muted" role="status"></small>
         <button id="wm_apply_recommended" class="menu_button" type="button">Recommend values for this context · Подобрать значения</button>
         <small class="wm-muted">Applies suggested values explicitly; every allowance stays editable. API connections and keys are separate.</small>
         <div class="wm-grid wm-budget-grid">
@@ -28,6 +29,7 @@
         <div id="wm_context_breakdown" class="wm-context-breakdown wm-muted" role="status" aria-live="polite">Planned N = H + R + T + W + F · difference from target C · plus protected P · actual prompt and overflow: waiting for data. F is setup/system/hints reserve or measurement.</div>
       </section>
       <div class="wm-actions wm-primary-actions"><button id="wm_summarize" class="menu_button" type="button">Summarize</button><button id="wm_stop" class="menu_button" type="button">Stop</button><button id="wm_open" class="menu_button" type="button">Open lorebook</button></div>
+      <small class="wm-muted">Резюмирование / Regenerate / Refine блока L0: 2 запроса на пакет — сначала L0 + L″ и сохранение, затем L′ / поиск / WI. Это отдельные фоновые вызовы, не игровой RP-ответ. Ошибка второго этапа не удаляет L0. Инструкции и последние запросы видны в Summarizer connection → Instructions.</small>
       <div id="wm_status" class="wm-status" role="status" aria-live="polite">Loading…</div>
       <div id="wm_history_status" class="wm-muted" role="status" aria-live="polite"></div>
       <div id="wm_prompt_size" class="wm-muted" role="status"></div>
@@ -54,17 +56,28 @@
         <label class="checkbox_label"><input id="wm_stream" data-setting="summarizerStreaming" type="checkbox"><span>Stream summarizer responses</span></label>
         <div class="wm-field"><label for="wm_summary_language">L0 language</label><select id="wm_summary_language" data-setting="summaryLanguage" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Russian</option><option value="custom">Custom language</option></select></div>
         <div class="wm-field wm-custom-language"><label for="wm_summary_custom_language">Custom language</label><input id="wm_summary_custom_language" data-setting="summaryCustomLanguage" class="text_pole" type="text" placeholder="Language name"></div>
-        <details class="wm-advanced"><summary>Advanced summary prompts</summary>
-          <small class="wm-muted">Controls L0 prose only. Blank fields use the built-in prompts. Search notes and WI are prepared separately.</small>
-          <div class="wm-field"><label for="wm_summary_system_prompt">System instructions</label><textarea id="wm_summary_system_prompt" data-setting="summarizerSystemPrompt" class="text_pole" rows="5" placeholder="Leave blank for the built-in summary instructions"></textarea></div>
-          <div class="wm-field"><label for="wm_summary_user_prompt">User template</label><textarea id="wm_summary_user_prompt" data-setting="summarizerUserPrompt" class="text_pole" rows="5" placeholder="Leave blank for the built-in user template"></textarea></div>
+        </details>
+        <details class="wm-advanced" id="wm_summary_prompt_panel"><summary>Instructions · Используемые инструкции и запросы</summary>
+          <p class="wm-muted">Этап 1: L0 + L″. Редактируется основа system и user-шаблон; ниже виден полный system с обязательными правилами неразрывности, языка и формата. Пустая основа использует показанный встроенный текст.</p>
+          <div class="wm-field"><label for="wm_summary_system_prompt">Stage 1 · System base / Основа инструкций</label><small id="wm_summary_system_prompt_source" class="wm-muted"></small><textarea id="wm_summary_system_prompt" data-setting="summarizerSystemPrompt" class="text_pole" rows="5"></textarea></div>
+          <div class="wm-field"><label for="wm_summary_user_prompt">Stage 1 · User template / Шаблон исходников</label><small id="wm_summary_user_prompt_source" class="wm-muted"></small><textarea id="wm_summary_user_prompt" data-setting="summarizerUserPrompt" class="text_pole" rows="5"></textarea></div>
           <small class="wm-muted">Template fields: {{story_txt}} = new sources; {{context_str}} = complete previous L0; {{player_name}} = player name.</small>
+          <button id="wm_reset_summary_prompts" class="menu_button" type="button">Use built-in WorldMemory prompts · Восстановить встроенные</button>
+          <p class="wm-muted">Этап 2: отдельные встроенные инструкции L′ / поиска / WI. Поля этапа 1 на них не влияют. Refine дополнительно получает сохранённое резюме; недостающие блоки исходников и предыдущего L0 добавляются кодом. WI добавляется отдельно при включённой настройке.</p>
+          <div class="wm-field"><label for="wm_prompt_preview_stage">Полный system по этапам · только просмотр</label><select id="wm_prompt_preview_stage" class="text_pole"><option value="l0System">Этап 1 · L0 + L″</option><option value="metadataSystem">Этап 2 · L′ / поиск / WI</option><option value="spineSystem">Отдельная подготовка L″</option></select><textarea id="wm_prompt_preview" class="text_pole" rows="10" readonly></textarea></div>
+          <small class="wm-muted">Предпросмотр по текущим настройкам. Во втором этапе WI / осведомлённость также зависят от доступных исходников и персонажей. Точные тексты конкретного вызова — ниже.</small>
+          <details class="wm-advanced"><summary>Последние 2 запроса этого чата · фактически передано транспорту</summary>
+            <select id="wm_prompt_request" class="text_pole" aria-label="Выберите отправленный запрос"></select>
+            <p id="wm_prompt_request_info" class="wm-muted"></p>
+            <label for="wm_prompt_sent_system">System</label><textarea id="wm_prompt_sent_system" class="text_pole" rows="10" readonly></textarea>
+            <label for="wm_prompt_sent_user">User · исходники и контекст</label><textarea id="wm_prompt_sent_user" class="text_pole" rows="10" readonly></textarea>
+            <small class="wm-muted">Хранятся только в памяти вкладки, без API-ключей и без записи в карточку/backup. Тексты могут содержать приватную игру; учитывайте это при скриншотах.</small>
+          </details>
         </details>
         <details class="wm-advanced"><summary>Advanced summarizer context</summary>
           <label class="checkbox_label"><input id="wm_summarizer_wi" data-setting="summarizerWorldInfo" type="checkbox"><span>Provide active native WI as summarizer context</span></label>
           <div class="wm-field"><label for="wm_summarizer_wi_percent">WI context allowance (% of source tokens)</label><input id="wm_summarizer_wi_percent" data-setting="summarizerWorldInfoPercent" class="text_pole" type="number" min="0" max="100" step="1"></div>
           <small class="wm-muted">Reference context helps identify entities. This allowance applies to background requests. Set the reply WI budget in ST's World Info settings.</small>
-        </details>
         </details>
       </details>
 
@@ -106,7 +119,7 @@
         <div id="wm_archive" class="wm-archive"></div>
         <button id="wm_backfill_spine" class="menu_button" type="button">Prepare missing story skeleton</button>
         <small class="wm-muted">New L0 replies include their skeleton in the same response. Old records need one preparation request each; L0 text is kept. Until prepared, their full saved account is used and may exceed the soft target. Manual text remains authoritative.</small>
-        <button id="wm_backfill_metadata" class="menu_button" type="button">Prepare missing search notes / WI</button>
+        <button id="wm_backfill_metadata" class="menu_button" type="button">Prepare search / WI · stage 2 only</button>
         <small class="wm-muted">Resumes the second step for saved L0 records without rewriting them. Uses the summarizer connection above. Stop cancels processing.</small>
       </details>
 
@@ -148,7 +161,7 @@
         <div id="wm_wi_search_status" class="wm-muted" role="status"></div>
         <div class="wm-field"><label for="wm_main_names">Additional main characters (one name per line)</label><textarea id="wm_main_names" class="text_pole" rows="3" placeholder="Mira&#10;Anton"></textarea></div>
         <small class="wm-muted">Principal characters in played scenes are also tracked automatically. This list adds explicit names.</small>
-        <div class="wm-actions"><button id="wm_retry_saved_wi" class="menu_button" type="button">Apply saved WI</button></div>
+        <div class="wm-actions"><button id="wm_retry_saved_wi" class="menu_button" type="button">Apply saved WI · 0 calls</button></div>
         <small class="wm-muted">Apply saved WI reuses saved results without a model request.</small>
         <details class="wm-advanced"><summary>Legacy WI maintenance</summary>
           <button id="wm_update" class="menu_button" type="button">Update legacy WI</button>
