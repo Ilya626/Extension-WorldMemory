@@ -142,9 +142,9 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize }
         context().setExtensionPrompt(PROMPT_KEY, '', s.injectionPosition ?? 1,
             s.injectionDepth ?? 12, s.injectionScan ?? false, s.injectionRole ?? 1);
         lastInjection = '';
-        promptSourceChat = null;
-        sourceChat = null;
+        // Clearing retrieved history must retain this generation's processed
+        // scene: swipe/continue can differ from the saved raw chat.
     }
 
-    return { refresh, capture, clear };
+    return { refresh, capture, clear, sceneChat: () => sourceChat === context().chat && promptSourceChat ? promptSourceChat : context().chat };
 }

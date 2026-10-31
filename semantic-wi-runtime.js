@@ -73,7 +73,7 @@ function similarity(a, b) {
  */
 export function createSemanticWIRuntime({ ctx, settings, embeddings, sourceQueries = () => null,
     sourceSignal = () => undefined, onUpdate = () => {} }) {
-    let serial = 0, prepared = null, index = new Map();
+    let serial = 0, prepared = null, index = new Map(), activationReasons = new Set();
     const controllers = new Set();
     const notify = () => { try { onUpdate(); } catch (error) { console.warn('[WorldMemory] WI status update failed.', error); } };
     const config = () => { const value = settings(); return {
@@ -127,6 +127,7 @@ export function createSemanticWIRuntime({ ctx, settings, embeddings, sourceQueri
     }
 
     async function onEntriesLoaded(payload) {
+        activationReasons = new Set();
         if (!config().enabled) { invalidate(); return; }
         // A failed query warm-up must not wait for the same unavailable endpoint
         // again during the following native scan. The next generation prepare,
@@ -178,6 +179,7 @@ export function createSemanticWIRuntime({ ctx, settings, embeddings, sourceQueri
             work.check();
             // Keep the native event arrays themselves: ST retains their original references.
             for (const [list, position, entry] of changes) list[position] = entry;
+            activationReasons = new Set(changes.flatMap(([, , entry]) => entry.key.slice(-1)));
             prepared = { status: 'ready', profileId: work.profileId,
                 queryRevision: hash(work.queries.length === 1 ? work.queries[0] : JSON.stringify(work.queries)),
                 queryWindows: work.queries.length, sourceScoped: sourceQueries() !== null,
@@ -197,7 +199,7 @@ export function createSemanticWIRuntime({ ctx, settings, embeddings, sourceQueri
     listen(events.WORLDINFO_ENTRIES_LOADED, onEntriesLoaded);
     for (const event of [events.CHAT_CHANGED, events.MESSAGE_SENT, events.MESSAGE_RECEIVED, events.MESSAGE_EDITED, events.MESSAGE_UPDATED, events.MESSAGE_SWIPED,
         events.MESSAGE_DELETED, events.WORLDINFO_UPDATED, events.GENERATION_STOPPED].filter(Boolean)) listen(event, invalidate);
-    return { prepare, invalidate, onEntriesLoaded,
+    return { prepare, invalidate, onEntriesLoaded, isActivationReason: key => activationReasons.has(key),
         inspect: () => prepared ? { ...prepared, selected: prepared.selected.map(row => ({ ...row })), indexed: index.size } : null,
         dispose() { invalidate(); for (const [event, handler] of listeners) context.eventSource.removeListener(event, handler); } };
 }

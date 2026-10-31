@@ -6,7 +6,11 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.4 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.5 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+
+The desired context is a planning target, not automatic padding. History has its own allowance; unused raw-tail, WI and setup allocations are not automatically reassigned to it. The UI shows the last assembled request separately from the plan.
+
+Already activated character profiles mentioned in the latest exchange are placed before the latest player post. Activation still belongs to SillyTavern. This applies to managed character profiles, author entries explicitly tagged `extensions.worldMemory.type: "character"`, and profiles matching the configured character catalogue. Untyped author lore keeps its configured placement. A managed profile's `Played memory through source message …` line records its update boundary; it is not a separate instruction or search hint. Request placement does not rewrite saved book positions.
 
 ## Start with the recommended setup
 

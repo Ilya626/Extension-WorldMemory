@@ -10,6 +10,7 @@ import { installArchiveRuntime } from './archive-runtime.js';
 import { SUMMARY_PROMPT_KEYS, copyLegacyPrompt, rememberPromptOrigin, describePromptOrigin, resetSummaryPrompts } from './summary-prompt-settings.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
+import { placeSceneProfiles } from './scene-wi.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
 import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
@@ -734,6 +735,8 @@ function renderWIStatus() {
     if (lastNativeWIScan?.metadata === ctx().chatMetadata) {
         const entries = lastNativeWIScan.entries;
         output.textContent += ` Последний игровой скан ST выбрал ${entries.length}: ${entries.map(entry => `${entry.title || `#${entry.uid}`} (${entry.constant ? 'Constant' : 'условия ST'})`).join('; ') || 'нет записей'}. Это результат сканирования, не подтверждение доставки после окончательной обрезки ST.`;
+        const scene = lastNativeWIScan.scene || [];
+        if (scene.length) output.textContent += ` Профили сцены перед последним постом игрока: ${scene.map(entry => entry.title || `#${entry.uid}`).join('; ')}. Сохранённые позиции книги не меняются.`;
     }
 }
 function applyNativeWIBudget() {
@@ -782,11 +785,14 @@ async function renderContextStatistics(run) {
     document.getElementById('wm_history_capacity').textContent = `Полный L″ / сохранённая история: ≈${n(h.baselineTokens)} · Подробности: ≈${n(h.detailTokens)} · Свободно: ${n(h.freeTokens)} из ${n(h.budgetTokens)} токенов${h.overflowTokens ? ` · Превышение +${n(h.overflowTokens)}; весь скелет сохранён` : ''}${!history?.inspect() ? ' · до поиска подробностей' : ''}`;
     const lines = [
         `План: история ${n(p.historyMaxTokens)} + хвост ${n(p.retainedContextTokens)} + рост до сжатия ${n(p.compressionTriggerTokens)} + WI ${p.wiActivationUnlimited ? 'без абсолютного лимита' : n(p.wiActivationTokens)} + резерв инструкций ${n(stats.fixed.estimatedTokens)} = ${n(stats.plannedTokens)} токенов${p.wiActivationUnlimited ? ' или больше' : ''}.`,
-        `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. Ручные значения не уменьшаются.`,
+        `Цель: ${n(p.promptTargetTokens)}. Разница плана: ${stats.plannedDifferenceTokens >= 0 ? '+' : ''}${n(stats.plannedDifferenceTokens)}. Ручные значения не уменьшаются. Цель не заполняет запрос автоматически: свободные квоты хвоста, WI и резерва не передаются истории.`,
         `Сырой текст сейчас: ≈${n(stats.raw.tokens)}; очередь старого текста: ≈${n(stats.raw.availableTokens)} из ${n(p.compressionTriggerTokens)} до сжатия.`,
         `Защищённые обмены: +≈${n(protectedTokens)} сверх бюджета C.`,
         `${p.wiActivationUnlimited && wiTokens === undefined ? 'Нижняя оценка сейчас: от' : 'Оценка сейчас: ≈'}${n(stats.accountedTokens)} + защита ≈${n(protectedTokens)} = ${n(stats.fullPromptTokens)}${stats.overflowTokens ? ` · выше C на ${n(stats.overflowTokens)} ещё без защиты` : ''}.`,
-        `Инструкции/карточка: резерв F, не замер. WI: ${wiTokens === undefined ? 'ещё не измерена' : 'последняя игровая активация'}. Последний собранный запрос ST: ≈${n(stats.nativeObservedTokens)}; он может отличаться от текущей оценки.`
+        `Инструкции/карточка: ${stats.fixed.tokens === null ? 'резерв F, не замер' : `последний замер ≈${n(stats.fixed.tokens)}`}. WI: ${wiTokens === undefined ? 'ещё не измерена' : 'последняя игровая активация'}. Последний собранный запрос ST: ≈${n(stats.nativeObservedTokens)}; он может отличаться от текущей оценки.`,
+        ...(stats.nativeObservedTokens === null ? [] : [`Последний запрос относительно C: ${stats.nativeObservedTokens < p.promptTargetTokens
+            ? `меньше на ≈${n(p.promptTargetTokens - stats.nativeObservedTokens)} — разница до цели`
+            : `выше на ≈${n(stats.nativeObservedTokens - p.promptTargetTokens)}`}. Защищённые обмены уже включены в этот замер.`])
     ];
     document.getElementById('wm_context_breakdown').replaceChildren(...lines.map(text => {
         const line = document.createElement('div'); line.textContent = text; return line;
@@ -1382,7 +1388,12 @@ async function init() {
     ctx().eventSource.makeFirst(events.WORLDINFO_ENTRIES_LOADED, injectBook);
     ctx().eventSource.on(events.WORLDINFO_SCAN_DONE, async args => {
         if (args?.state?.next || getSummaryWorldInfoSources() || nativeReferenceScope) return;
-        lastNativeWIScan = { metadata: ctx().chatMetadata, entries: [...(args?.activated?.entries?.values?.() || [])]
+        const scene = settings().enabled && args?.activated?.entries ? placeSceneProfiles({ activated: args.activated.entries,
+            catalogue: args.sortedEntries || [], chat: history?.sceneChat() || ctx().chat, mainNames: state()?.mainNames || [],
+            parseRegex: nativeWI.parseRegexFromString, substitute: ctx().substituteParams,
+            caseSensitive: nativeWI.world_info_case_sensitive, atDepth: nativeWI.world_info_position.atDepth,
+            isActivationReason: key => semanticWI?.isActivationReason(key) }) : [];
+        lastNativeWIScan = { metadata: ctx().chatMetadata, scene, entries: [...(args?.activated?.entries?.values?.() || [])]
             .map(entry => ({ uid: entry.uid, title: entry.comment, world: entry.world, constant: entry.constant })) };
         renderWIStatus();
         const metadata = ctx().chatMetadata, text = args?.activated?.text || '', measurement = wiMeasurementSerial;

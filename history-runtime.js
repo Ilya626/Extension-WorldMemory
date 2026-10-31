@@ -146,6 +146,6 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     for (const event of [events.CHAT_CHANGED, events.MESSAGE_EDITED, events.MESSAGE_UPDATED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED, events.GENERATION_STOPPED].filter(Boolean)) ctx().eventSource.on(event, changed);
     ctx().eventSource.on(events.GENERATION_ENDED, () => syncHints(false));
     globalThis.worldMemoryPrepareHistory = prepare; syncHints();
-    return { embeddings, prepare, changed, refresh: injection.refresh, stop: invalidate, inspect: () => prepared ? { ...prepared, key: undefined } : null,
+    return { embeddings, prepare, changed, refresh: injection.refresh, sceneChat: injection.sceneChat, stop: invalidate, inspect: () => prepared ? { ...prepared, key: undefined } : null,
         groupsFor: async () => [], requestFields: () => ({}), accept: async () => {}, prune: async () => {}, system: () => '', pending: () => false };
 }

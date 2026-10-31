@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+- Place already activated character profiles from the latest exchange immediately before the latest player post. Native activation, entry content and saved book positions remain under their existing rules; placement uses the processed chat and excludes synthetic semantic activation keys.
+- Recognize managed character profiles, explicitly typed author profiles (`extensions.worldMemory.type: "character"`) and profiles matching the configured character catalogue. Untyped author lore is not guessed to be a character.
+- Show the difference between desired context and the last assembled request. Unused tail, WI and setup allocations do not automatically increase the history allowance.
+
 ## 0.5.4 — 2026-11-01 — effective prompts and tokenizer health
 
 - Display effective stage-1 system base/user template, their recorded origin and an explicit reset. Migrated Summaryception prompts remain visible and editable; old unstamped origins are not guessed from a text match.
