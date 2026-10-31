@@ -156,6 +156,8 @@
       <details class="wm-section"><summary>Portable backup</summary>
         <p class="wm-muted">Native lorebook JSON carries editable WI and its source contributions. WorldMemory backups also preserve packet links.</p>
         <div class="wm-actions"><button id="wm_export" class="menu_button" type="button">Export backup</button><button id="wm_import" class="menu_button" type="button">Import backup</button></div>
+        <div class="wm-actions"><button id="wm_card_save" class="menu_button" type="button">Save memory to card</button><button id="wm_card_load" class="menu_button" type="button">Read memory from card</button></div>
+        <small class="wm-muted">Save embeds a snapshot of this chat's archive, full outline, archived sources and managed WI in the selected character card. It replaces the card's previous memory snapshot. Export the card as PNG/JSON in ST. Read replaces this chat's WorldMemory state, like Import backup; export your current backup first. No automatic overwrite or model calls. Export the ongoing chat separately to continue from its latest turn.</small>
         <input id="wm_import_file" type="file" accept=".json" hidden>
       </details>
       <div id="wm_integration" class="wm-muted"></div>

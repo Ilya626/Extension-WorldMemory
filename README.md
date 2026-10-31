@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.0 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.1 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 **Complete chronological outline (L″).** The entire available outline remains in each history-enabled prompt; independently retrieved originals follow their matching steps. New L0 packets include a short outline in the same model response. Older archives need explicit preparation; until then, complete labelled L0 accounts remain and can greatly exceed the target. Manual text is preserved. The growing L0 archive, full L″ and normal retrieval are unchanged in 0.5.0. [Earlier outline validation](docs/VALIDATION_0_4.md).
 
@@ -200,6 +200,10 @@ Previously disabled history migrates to **Advanced history insertion → Insert 
 For an existing Summaryception setup, WorldMemory imports the saved archive and relevant settings. If the old extension is active, WorldMemory saves the import, disables the old runtime and reloads once. Inspect **L0 archive** before continuing; do not run both archive writers for the same chat. Imported summaries without available originals remain summary-only.
 
 **Import backup replaces the receiving chat's WorldMemory state.** Export that state first. A lorebook alone cannot restore history; keep both the WorldMemory backup and the original chat.
+
+**Memory inside a character card:** choose **Portable backup → Save memory to card**, then use ST's normal PNG or JSON card export. The snapshot includes L0, the complete available L″, archived originals, search metadata and the managed WI book; author lore and other card fields are preserved. API keys and connection settings are not included.
+
+On the receiving device, import the card and its author lorebook, open the intended chat, then choose **Read memory from card**. This explicitly replaces that chat's WorldMemory state, like Import backup. **Export the ongoing ST chat separately** to retain its current dialogue and raw tail. Imported chats that already contain memory need no second restore. Card snapshots update only when requested, with no model calls or automatic overwrite.
 
 ## Preview limits
 

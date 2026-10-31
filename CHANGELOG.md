@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 — 2026-10-31 — portable memory in character cards
+
+- Add **Portable backup → Save memory to card / Read memory from card**. Store an explicit `world-memory-v1` snapshot in `data.extensions.worldMemoryBackup`, preserved by native PNG/JSON card export. Include L0, available L″, archived originals, search metadata and the managed WI book; keep author lore and other card fields.
+- Replace the previous card snapshot exactly, without deep-merging removed archive records. Read through the existing guarded backup importer; no automatic overwrite, model requests, API credentials or connection settings.
+- Keep the ongoing ST chat and recent raw tail as a separate chat export. Card reading restores memory for the open chat, not the live conversation.
+- Preserve the original file-import receiver reservation before asynchronous file reading.
+
 ## 0.5.0 — 2026-10-31 — optional NPC information events
 
 - Add optional source-bound `observed` / `reported` events to the existing second-stage search-metadata / WI response. Keep the growing L0 archive, complete L″, normal retrieval and two-call background packet flow unchanged.

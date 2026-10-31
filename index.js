@@ -638,7 +638,7 @@ function schedule() {
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
     $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
-    $('#wm_archive button, #wm_import, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
+    $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
 function button(text, callback) {
@@ -821,6 +821,174 @@ function download(name, data) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+async function exportBackup() {
+    const context = ctx(), metadata = context.chatMetadata, memory = state();
+    if (!memory) throw new Error('Open a chat to export its saved memory.');
+    const book = await getBook(Boolean(memory.cloneFrom));
+    if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || state() !== memory)
+        throw new Error('Chat changed. Export the memory of the selected chat again.');
+    const saved = structuredClone(memory);
+    for (const packet of archiveRuntime.snapshot({ effective: false }).packets) for (const source of packet.sources)
+        saved.archive.sources[source.id] = structuredClone(source);
+    return { format: 'world-memory-v1', version: VERSION, state: saved, book };
+}
+async function readCharacterCard(avatar) {
+    // Export strips private native fields such as favourites; read the stored card instead.
+    const response = await fetch('/api/characters/get', { method: 'POST', headers: ctx().getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar }) });
+    if (!response.ok) throw new Error(`Could not read the character card (HTTP ${response.status}).`);
+    const result = await response.json();
+    const raw = typeof result.json_data === 'string' ? JSON.parse(result.json_data) : null;
+    const card = raw?.data ? raw : result;
+    if (!card.data?.name) throw new Error('The selected character has no valid V2 card data.');
+    return card;
+}
+function selectedCardAvatar() {
+    const context = ctx(), avatar = context.characters[context.characterId]?.avatar;
+    if (context.groupId || !avatar) throw new Error('Select an individual character chat for card memory.');
+    return avatar;
+}
+async function saveMemoryToCard() {
+    if (busy || archiveRuntime.isBusy() || !state()) return;
+    const context = ctx(), metadata = context.chatMetadata, avatar = selectedCardAvatar();
+    busy = true; controller = new AbortController(); clearTimeout(timer); renderBusy();
+    const check = () => {
+        controller.signal.throwIfAborted();
+        if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || selectedCardAvatar() !== avatar)
+            throw new Error('Chat or character changed. Card memory was not updated.');
+    };
+    try {
+        const backup = await exportBackup(), card = await readCharacterCard(avatar); check();
+        // Replace this snapshot exactly; a deep merge would retain removed archive records.
+        // Read fresh extensions first so native WI bindings and unrelated addons survive.
+        const extensions = { ...card.data.extensions, worldMemoryBackup: backup };
+        const response = await fetch('/api/characters/edit-attribute', { method: 'POST', headers: context.getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: avatar, ch_name: card.data.name, field: 'extensions', value: extensions }) });
+        if (!response.ok) throw new Error(`Could not write card memory (HTTP ${response.status}).`);
+        const written = await readCharacterCard(avatar);
+        if (JSON.stringify(written.data.extensions?.worldMemoryBackup) !== JSON.stringify(backup))
+            throw new Error('The card write could not be verified. Keep the separate backup.');
+        const character = ctx().characters.find(item => item.avatar === avatar);
+        if (character) {
+            character.data ??= {}; character.data.extensions = structuredClone(written.data.extensions);
+            character.json_data = JSON.stringify(written);
+            if (ctx().characters[ctx().characterId]?.avatar === avatar) $('#character_json_data').val(character.json_data);
+        }
+        status('Memory saved in the character card. Export this card as PNG or JSON in ST. The card includes archived sources and WI; export the ongoing chat separately.');
+    } finally { controller = null; busy = false; renderBusy(); }
+}
+async function loadMemoryFromCard() {
+    if (busy || archiveRuntime.isBusy() || !state()) return;
+    const context = ctx(), metadata = context.chatMetadata, avatar = selectedCardAvatar();
+    const card = await readCharacterCard(avatar);
+    if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || selectedCardAvatar() !== avatar)
+        throw new Error('Chat or character changed. Card memory was not imported.');
+    const backup = card.data.extensions?.worldMemoryBackup;
+    if (!backup) throw new Error('This card has no WorldMemory snapshot. Use Save memory to card first.');
+    await importBackup(backup);
+}
+async function importBackup(input) {
+        let reserved = false, context, memory, metadata, next, published = false, committed = false;
+        try {
+            if (busy || archiveRuntime.isBusy() || !state()) return;
+            context = ctx(); metadata = context.chatMetadata; memory = state();
+            const owner = memory.owner, originalBook = memory.book;
+            busy = true; reserved = true; controller = new AbortController();
+            const signal = controller.signal;
+            clearTimeout(timer); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy();
+            const check = (expected = memory) => {
+                signal.throwIfAborted();
+                if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || ctx().chatId !== context.chatId
+                    || metadata[OWNER] !== expected || expected.owner !== owner
+                    || (expected === memory && memory.book !== originalBook) || archiveRuntime.isBusy()) {
+                    throw new Error('The receiving chat or memory changed. Backup import was cancelled.');
+                }
+            };
+            const data = typeof input === 'function' ? await input() : input;
+            check();
+            if (data?.format !== 'world-memory-v1' || (!data.book?.entries && !data.state?.archive)) throw new Error('Import a World Memory backup; native lorebooks can be imported in ST World Info.');
+            const object = value => value && typeof value === 'object' && !Array.isArray(value);
+            if (data.state && !object(data.state)) throw new Error('Backup memory state must be an object.');
+            next = structuredClone(memory);
+            next.mainNames = structuredClone(data.state?.mainNames || []);
+            if (!Array.isArray(next.mainNames) || next.mainNames.some(name => typeof name !== 'string')) throw new Error('Backup character names must be a list of strings.');
+            const foreign = data.state?.chatId !== context.chatId;
+            next.packets = structuredClone(foreign ? {} : data.state?.packets || {});
+            next.wiPackets = {};
+            next.history = structuredClone(foreign ? {} : data.state?.history || {});
+            if (!object(next.packets) || !object(next.history)) throw new Error('Backup packet and history state must be objects.');
+            if (data.state?.archive) {
+                next.archive = createArchive(data.state.archive);
+                if (![next.archive.records, next.archive.sources, next.archive.legacy].every(object)) throw new Error('Backup archive records, sources and legacy state must be objects.');
+                for (const record of Object.values(next.archive.records)) {
+                    if (!object(record) || typeof record.id !== 'string' || typeof record.text !== 'string'
+                        || !Array.isArray(record.sourceMessageIds) || record.sourceMessageIds.some(id => typeof id !== 'string')) {
+                        throw new Error('Backup archive has an invalid packet or source-link list.');
+                    }
+                }
+                if (foreign) {
+                    const present = new Set(context.chat.map(message => message.sc_message_id || message.extra?.sc_message_id).filter(Boolean));
+                    for (const record of Object.values(next.archive.records)) record.unavailableSourceIds = record.sourceMessageIds.filter(id => !present.has(id));
+                }
+            }
+            const book = data.book?.entries ? structuredClone(data.book) : null;
+            if (book && (!object(book.entries) || Object.values(book.entries).some(entry => !object(entry)
+                || !Number.isInteger(entry.uid) || !Array.isArray(entry.key) || entry.key.some(key => typeof key !== 'string')
+                || typeof entry.comment !== 'string' || typeof entry.content !== 'string'
+                || (entryMeta(entry) && !object(entryMeta(entry)))))) throw new Error('Backup contains an invalid native WI entry.');
+            for (const entry of Object.values(book?.entries || {})) {
+                const meta = entryMeta(entry); if (!meta) continue;
+                if (!object(meta.contributions)) throw new Error('Backup managed WI contributions must be an object.');
+                meta.owner = owner;
+                if (foreign) { meta.manual = true; meta.contributions = {}; }
+            }
+            if (book) {
+                // Publish the imported book with the metadata pointer. Never overwrite
+                // the receiving book: a failed save still leaves the old pair recoverable.
+                next.book = `WorldMemory_${owner}_import_${crypto.randomUUID()}`;
+                delete next.cloneFrom;
+                delete next.cloneOwner;
+                if (data.state?.book && data.state?.owner) rebindKnowledgeIdentities(next.archive,
+                    { book: data.book, world: data.state.book, owner: data.state.owner },
+                    { book, world: next.book, owner });
+                if (!foreign && data.state?.archive) for (const record of Object.values(next.archive.records)) {
+                    const stamp = record.memoryMetadata?.wiContext;
+                    if (stamp?.owner === data.state.owner && stamp.book === data.state.book) {
+                        stamp.owner = owner; stamp.book = next.book;
+                    }
+                }
+                check();
+                if (!await nativeWI.createNewWorldInfo(next.book, { interactive: false })) throw new Error('ST could not create the imported WI book. Previous memory was kept.');
+                check();
+                await nativeWI.saveWorldInfo(next.book, book, true); check();
+            }
+            check();
+            metadata[OWNER] = next; published = true;
+            check(next);
+            await context.saveMetadata();
+            committed = true;
+            history.changed();
+            if (ctx().chatMetadata === metadata) {
+                await render(); await renderArchive();
+                status('Backup imported. Review the saved archive and source links before summarizing.');
+            }
+        } catch (error) {
+            if (published && !committed && metadata[OWNER] === next) {
+                metadata[OWNER] = memory;
+                // A native save can fail after reaching the server. Keep the prepared
+                // book for recovery; never delete a possible persisted metadata target.
+                if (ctx().chatMetadata === metadata && ctx().chat === context.chat) {
+                    try { await context.saveMetadata(); }
+                    catch (restoreError) { console.error('[WorldMemory] Could not persist restored memory.', restoreError); }
+                }
+            }
+            history?.changed(); semanticWI?.invalidate();
+            status(error.message); toastr.warning(error.message, 'World Memory');
+        } finally {
+            if (reserved) { controller = null; busy = false; renderBusy(); }
+        }
+}
+
 async function init() {
     nativeWI = await import('/scripts/world-info.js'); settings();
     $('#extensions_settings2').append(await ctx().renderExtensionTemplateAsync('third-party/Extension-WorldMemory', 'settings', {}));
@@ -911,116 +1079,17 @@ async function init() {
     });
     $('#wm_open').on('click', () => { if (state()?.book) nativeWI.openWorldInfoEditor(state().book); else status('Update memory first to create the book.'); });
     $('#wm_export').on('click', async () => {
-        if (!state()) return status('Open a chat to export its saved memory.');
-        const saved = structuredClone(state());
-        for (const packet of archiveRuntime.snapshot({ effective: false }).packets) for (const source of packet.sources) {
-            saved.archive.sources[source.id] = structuredClone(source);
-        }
-        download('world-memory-backup.json', { format: 'world-memory-v1', version: VERSION, state: saved, book: await getBook() });
+        try { if (!busy && !archiveRuntime.isBusy()) download('world-memory-backup.json', await exportBackup()); }
+        catch (error) { status(error.message); toastr.warning(error.message, 'World Memory'); }
     });
+    $('#wm_card_save').on('click', () => { void saveMemoryToCard().catch(error => { status(error.message); toastr.warning(error.message, 'World Memory'); }); });
+    $('#wm_card_load').on('click', () => { void loadMemoryFromCard().catch(error => { status(error.message); toastr.warning(error.message, 'World Memory'); }); });
     $('#wm_import').on('click', () => document.getElementById('wm_import_file').click());
     $('#wm_import_file').on('change', async event => {
-        let reserved = false, context, memory, metadata, next, published = false, committed = false;
-        try {
-            if (busy || archiveRuntime.isBusy() || !state()) return;
-            const file = event.target.files[0]; if (!file) return;
-            context = ctx(); metadata = context.chatMetadata; memory = state();
-            const owner = memory.owner, originalBook = memory.book;
-            busy = true; reserved = true; controller = new AbortController();
-            const signal = controller.signal;
-            clearTimeout(timer); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy();
-            const check = (expected = memory) => {
-                signal.throwIfAborted();
-                if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || ctx().chatId !== context.chatId
-                    || metadata[OWNER] !== expected || expected.owner !== owner
-                    || (expected === memory && memory.book !== originalBook) || archiveRuntime.isBusy()) {
-                    throw new Error('The receiving chat or memory changed. Backup import was cancelled.');
-                }
-            };
-            const data = JSON.parse(await file.text());
-            check();
-            if (data.format !== 'world-memory-v1' || (!data.book?.entries && !data.state?.archive)) throw new Error('Import a World Memory backup; native lorebooks can be imported in ST World Info.');
-            const object = value => value && typeof value === 'object' && !Array.isArray(value);
-            if (data.state && !object(data.state)) throw new Error('Backup memory state must be an object.');
-            next = structuredClone(memory);
-            next.mainNames = structuredClone(data.state?.mainNames || []);
-            if (!Array.isArray(next.mainNames) || next.mainNames.some(name => typeof name !== 'string')) throw new Error('Backup character names must be a list of strings.');
-            const foreign = data.state?.chatId !== context.chatId;
-            next.packets = structuredClone(foreign ? {} : data.state?.packets || {});
-            next.wiPackets = {};
-            next.history = structuredClone(foreign ? {} : data.state?.history || {});
-            if (!object(next.packets) || !object(next.history)) throw new Error('Backup packet and history state must be objects.');
-            if (data.state?.archive) {
-                next.archive = createArchive(data.state.archive);
-                if (![next.archive.records, next.archive.sources, next.archive.legacy].every(object)) throw new Error('Backup archive records, sources and legacy state must be objects.');
-                for (const record of Object.values(next.archive.records)) {
-                    if (!object(record) || typeof record.id !== 'string' || typeof record.text !== 'string'
-                        || !Array.isArray(record.sourceMessageIds) || record.sourceMessageIds.some(id => typeof id !== 'string')) {
-                        throw new Error('Backup archive has an invalid packet or source-link list.');
-                    }
-                }
-                if (foreign) {
-                    const present = new Set(context.chat.map(message => message.sc_message_id || message.extra?.sc_message_id).filter(Boolean));
-                    for (const record of Object.values(next.archive.records)) record.unavailableSourceIds = record.sourceMessageIds.filter(id => !present.has(id));
-                }
-            }
-            const book = data.book?.entries ? structuredClone(data.book) : null;
-            if (book && (!object(book.entries) || Object.values(book.entries).some(entry => !object(entry)
-                || !Number.isInteger(entry.uid) || !Array.isArray(entry.key) || entry.key.some(key => typeof key !== 'string')
-                || typeof entry.comment !== 'string' || typeof entry.content !== 'string'
-                || (entryMeta(entry) && !object(entryMeta(entry)))))) throw new Error('Backup contains an invalid native WI entry.');
-            for (const entry of Object.values(book?.entries || {})) {
-                const meta = entryMeta(entry); if (!meta) continue;
-                if (!object(meta.contributions)) throw new Error('Backup managed WI contributions must be an object.');
-                meta.owner = owner;
-                if (foreign) { meta.manual = true; meta.contributions = {}; }
-            }
-            if (book) {
-                // Publish the imported book with the metadata pointer. Never overwrite
-                // the receiving book: a failed save still leaves the old pair recoverable.
-                next.book = `WorldMemory_${owner}_import_${crypto.randomUUID()}`;
-                delete next.cloneFrom;
-                delete next.cloneOwner;
-                if (data.state?.book && data.state?.owner) rebindKnowledgeIdentities(next.archive,
-                    { book: data.book, world: data.state.book, owner: data.state.owner },
-                    { book, world: next.book, owner });
-                if (!foreign && data.state?.archive) for (const record of Object.values(next.archive.records)) {
-                    const stamp = record.memoryMetadata?.wiContext;
-                    if (stamp?.owner === data.state.owner && stamp.book === data.state.book) {
-                        stamp.owner = owner; stamp.book = next.book;
-                    }
-                }
-                check();
-                if (!await nativeWI.createNewWorldInfo(next.book, { interactive: false })) throw new Error('ST could not create the imported WI book. Previous memory was kept.');
-                check();
-                await nativeWI.saveWorldInfo(next.book, book, true); check();
-            }
-            check();
-            metadata[OWNER] = next; published = true;
-            check(next);
-            await context.saveMetadata();
-            committed = true;
-            history.changed();
-            if (ctx().chatMetadata === metadata) {
-                await render(); await renderArchive();
-                status('Backup imported. Review the saved archive and source links before summarizing.');
-            }
-        } catch (error) {
-            if (published && !committed && metadata[OWNER] === next) {
-                metadata[OWNER] = memory;
-                // A native save can fail after reaching the server. Keep the prepared
-                // book for recovery; never delete a possible persisted metadata target.
-                if (ctx().chatMetadata === metadata && ctx().chat === context.chat) {
-                    try { await context.saveMetadata(); }
-                    catch (restoreError) { console.error('[WorldMemory] Could not persist restored memory.', restoreError); }
-                }
-            }
-            history?.changed(); semanticWI?.invalidate();
-            status(error.message); toastr.warning(error.message, 'World Memory');
-        } finally {
-            if (reserved) { controller = null; busy = false; renderBusy(); }
-            event.target.value = '';
-        }
+        const file = event.target.files[0];
+        try { if (file) await importBackup(async () => JSON.parse(await file.text())); }
+        catch (error) { status(error.message); toastr.warning(error.message, 'World Memory'); }
+        finally { event.target.value = ''; }
     });
     const events = ctx().eventTypes || ctx().event_types;
     // Runs before RussianWI's normal listener, so it can expand the new ordinary keys too.
