@@ -34,9 +34,10 @@ export function historyPacketThreads(nodes) {
 
 /** targetTokens excludes the live raw tail, WI and system/card. It is a soft target. */
 export async function selectHistory(nodes, ranked, { targetTokens, countTokens, format = text => text,
-    storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false, allowOverflow = true }) {
+    storyNodes = nodes, excludedSourceIds = [], nativeOverlap = false, allowOverflow = true, targetSlackTokens = 0 }) {
     const target = Math.max(0, Number(targetTokens) || 0), excluded = new Set(excludedSourceIds);
     const sourceMap = new Map(storyNodes.flatMap(node => node.sources || []).map(source => [source.id, source]));
+    const revisions = new Map([...sourceMap].map(([id, source]) => [id, hash(source.text)]));
     const cells = storySpineCells(storyNodes);
     const bySource = new Map();
     for (const cell of cells) for (const span of cell.sourceSpans) {
@@ -103,12 +104,16 @@ export async function selectHistory(nodes, ranked, { targetTokens, countTokens, 
     const baselineTokens = tokens, selected = [], ids = new Set();
     for (const candidate of ranked) {
         if (!target || tokens >= target) break;
+        // A final fill may stop within a few tokens of its soft target rather
+        // than re-encoding the full history for hundreds of remaining windows.
+        // Normal retrieval has zero slack; no accepted passage is removed.
+        if (!allowOverflow && selected.length && target - tokens <= targetSlackTokens) break;
         if (ids.has(candidate.id)) continue;
         ids.add(candidate.id);
         const added = [];
         if (candidate.kind === 'raw') for (const span of candidate.sourceSpans || []) {
             const source = sourceMap.get(span.sourceId);
-            if (!source || source.hidden || excluded.has(source.id) || span.sourceRevision !== hash(source.text)
+            if (!source || source.hidden || excluded.has(source.id) || span.sourceRevision !== revisions.get(source.id)
                 || span.offsetUnit !== 'utf16' || span.endExclusive !== true || !Number.isInteger(span.start)
                 || !Number.isInteger(span.end) || span.start < 0 || span.end > source.text.length || span.end <= span.start) continue;
             if ((bySource.get(span.sourceId) || []).some(match => match.cell.expandable

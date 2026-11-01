@@ -69,11 +69,14 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         }
         try {
             const protectedTokens = protectedMessages.length ? Math.max(0, await countPromptTokens(protectedMessages, current) - 3) : 0;
+            // Use the same wrapper/counting scale as the initial selection, so
+            // its already-counted prefixes can be reused by the final fill.
+            const formatHistory = text => render(work.selectionOptions.format(text));
             const result = await topUpHistory({ prompt, historyText: prepared.text,
                 targetTokens: s.promptTargetTokens ?? 32000, protectedTokens, inputCapacity: work.inputCapacity,
-                countPrompt: messages => countPromptTokens(messages, current), countText: countTokens, render, isCurrent,
+                countPrompt: messages => countPromptTokens(messages, current), countText: text => countTokens(formatHistory(text)), render, isCurrent,
                 expand: targetTokens => selectHistory(work.nodes, [...work.ranked, ...(work.fillCandidates || [])], { ...work.selectionOptions,
-                    targetTokens, allowOverflow: false, format: text => render(text) }) });
+                    targetTokens, allowOverflow: false, targetSlackTokens: 64, format: formatHistory }) });
             if (!isCurrent()) return;
             const { expanded, ...topUp } = result;
             if (expanded) prepared = { ...prepared, ...expanded, key: work.key, finalTopUp: topUp };

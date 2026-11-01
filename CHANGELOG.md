@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.9 — 2026-11-01 — reduce local request assembly work
+
+- Find token-verified source-window boundaries with fewer tokenizer probes; count up to four independent sources concurrently, then assemble documents in original order. Reuse the existing embedding space and cached vectors.
+- Coalesce concurrent token counts for the same text and count independent prompt fields with four workers. If the counting scale falls back, recount the prompt consistently.
+- Reuse the initial history wrapper for final token accounting and cache each source revision once per selection.
+- Stop final fill within 64 tokens of its soft target instead of re-encoding the whole history for hundreds of tiny remaining opportunities. Initial history selection has no such tolerance; accepted passages, complete outline, raw tail, WI and manual settings are retained.
+
 ## 0.5.8 — 2026-11-01 — history fill after retrieval failures
 
 - Keep local keyword retrieval and final history fill available after an embedding inactivity timeout. Cancelling generation or changing sources still stops the work.

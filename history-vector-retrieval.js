@@ -110,11 +110,36 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
         };
         const boundaries = [...text.matchAll(/[.!?…]+[»”"'’)\]]*(?:\s+|$)|\n+/gu)].map(m => m.index + m[0].length);
         if (boundaries.at(-1) !== text.length) boundaries.push(text.length);
-        const result = []; let start = 0, end = 0;
-        const push = last => { if (text.slice(start, last).trim()) result.push({ start, end: last }); start = last; end = last; };
-        for (const boundary of boundaries) {
-            if (await size(start, boundary) <= TARGET) { end = boundary; continue; }
-            if (end > start) push(end);
+        const result = []; let start = 0;
+        const push = last => { if (text.slice(start, last).trim()) result.push({ start, end: last }); start = last; };
+        // Probe near the expected end, then bracket the last fitting sentence.
+        // Character density only chooses probes: every accepted end and its next
+        // sentence are checked with the caller's unchanged tokenizer.
+        let density = (await size(0, text.length)) / Math.max(1, text.length), first = 0;
+        while (first < boundaries.length) {
+            let left = first, right = boundaries.length - 1;
+            const expected = start + TARGET / (density || 1);
+            while (left < right) {
+                const middle = Math.ceil((left + right) / 2);
+                if (boundaries[middle] <= expected) left = middle; else right = middle - 1;
+            }
+            let lo = first - 1, hi = boundaries.length, probe = left, step = 1;
+            while (true) {
+                const value = await size(start, boundaries[probe]);
+                if (value > TARGET) { hi = probe; break; }
+                lo = probe;
+                if (lo === boundaries.length - 1) break;
+                probe = Math.min(boundaries.length - 1, lo + step); step *= 2;
+            }
+            while (hi - lo > 1) {
+                const middle = Math.floor((lo + hi) / 2);
+                if (await size(start, boundaries[middle]) <= TARGET) lo = middle; else hi = middle;
+            }
+            if (lo >= first) {
+                density = (await size(start, boundaries[lo])) / (boundaries[lo] - start);
+                push(boundaries[lo]); first = lo + 1; continue;
+            }
+            const boundary = boundaries[first];
             while (await size(start, boundary) > TARGET) {
                 let lo = start + 1, hi = boundary;
                 while (lo < hi) {
@@ -126,7 +151,6 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
                 if (cut <= start) throw new Error('Unable to split this source into history windows.');
                 push(cut);
             }
-            end = boundary;
         }
         if (start < text.length) push(text.length);
         check(); chunkCache.set(text, result);
@@ -145,8 +169,23 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
         const sources = sourcesOf(nodes), docs = [], bySource = new Map(), facts = [], threads = [];
         const bag = text => new Set(terms(text).flatMap(term => [term, ...(Array.isArray(lemmas[term]) ? lemmas[term] : [])]));
         const df = new Map(); let sourceCount = 0, ignoredFacts = 0;
-        for (const entry of sources.values()) {
-            const spans = await chunks(entry.source.text, check, onActivity), group = [];
+        const entries = [...sources.values()], sourceChunks = new Array(entries.length);
+        let nextSource = 0, stopped = false;
+        const workers = await Promise.allSettled(Array.from({ length: Math.min(4, entries.length) }, async () => {
+            try {
+                while (!stopped && nextSource < entries.length) {
+                    check(); const index = nextSource++;
+                    sourceChunks[index] = await chunks(entries[index].source.text, check, onActivity);
+                    check(); onProgress?.({ phase: 'indexing', stage: 'chunking', completed: ++sourceCount,
+                        total: sources.size, pending: sources.size - sourceCount }); check();
+                }
+            } catch (error) { stopped = true; throw error; }
+        }));
+        const failure = workers.find(worker => worker.status === 'rejected');
+        if (failure) throw failure.reason;
+        // Counting runs independently; documents and df retain original source order.
+        for (const [index, entry] of entries.entries()) {
+            const spans = sourceChunks[index], group = [];
             for (const [i, span] of spans.entries()) {
                 const input = `${label(entry.source)}: ${entry.source.text.slice(span.start, span.end)}`;
                 const doc = { id: `raw-center:${entry.node}:${entry.source.id}:${span.start}-${span.end}`, entry, input,
@@ -157,7 +196,7 @@ export function createHistoryVectorRetrieval({ embeddings, countTokens }) {
                 for (const word of doc.words) df.set(word, (df.get(word) || 0) + 1);
             }
             bySource.set(entry.source.id, group);
-            check(); onProgress?.({ phase: 'indexing', stage: 'chunking', completed: ++sourceCount, total: sources.size, pending: sources.size - sourceCount }); check();
+            check();
         }
         const rawCenters = docs.length;
         const memories = nodes.filter(node => !node.hidden && !node.stale && (node.summaryOnly || node.manual)

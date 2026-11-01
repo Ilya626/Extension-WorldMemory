@@ -2,6 +2,7 @@
 const states = new Map();
 const PROBE = 'Token counter check. Проверка токенизатора.';
 const MAX_CACHE = 512;
+const PROMPT_CONCURRENCY = 4;
 const FRAMING = 'chat framing: approximate 3/message + 3 reply tokens; text only';
 const NATIVE_WARNING = 'Native ST prompt trimming and WI activation use their own counter/cache and may differ.';
 const contextOf = context => context || globalThis.SillyTavern?.getContext?.() || {};
@@ -14,7 +15,8 @@ function stateOf(context) {
     if (!states.has(key)) {
         if (states.size >= 16) states.delete(states.keys().next().value);
         states.set(key, { key, model: context.getTokenizerModel?.() || '', mode: 'pending',
-            estimator: 'ST native counter; tokenizer health pending', nativeVerified: false, cache: new Map(), pending: null });
+            estimator: 'ST native counter; tokenizer health pending', nativeVerified: false,
+            cache: new Map(), inflight: new Map(), pending: null });
     }
     return states.get(key);
 }
@@ -77,6 +79,39 @@ export function tokenCounterStatus(context) {
 }
 export const tokenCounterKey = context => tokenCounterStatus(context).key;
 
+async function countUncached(text, current, state) {
+    let count, mode = state.mode;
+    if (mode === 'native') {
+        try {
+            // Bypass ST's text-count cache: it can retain an old byte fallback after assets recover.
+            count = state.nativeVerified ? await encode(current, state.model, text)
+                : await current.getTokenCountAsync?.(text, 0);
+            if (!Number.isFinite(count) || count <= 0) throw new Error('Invalid native count.');
+        } catch {
+            count = undefined;
+            if (state.mode !== mode) return countUncached(text, current, state);
+            // Native failures can occur after a successful probe. Keep the change visible in the cache key.
+            try {
+                count = await encode(current, 'gpt-4o', text);
+                if (state.mode === mode) useMode(state, 'o200k', 'Native counter failed.');
+                mode = 'o200k';
+            } catch {
+                if (state.mode === mode) useMode(state, 'approx', 'Local counters unavailable.');
+                mode = 'approx';
+            }
+        }
+    } else if (mode === 'o200k') {
+        try { count = await encode(current, 'gpt-4o', text); }
+        catch { useMode(state, 'approx', 'Local o200k counter failed.'); mode = 'approx'; }
+    }
+    // Another field may have triggered fallback while this request was in flight.
+    if (state.mode !== mode) return countUncached(text, current, state);
+    count ??= Math.ceil(text.length / 4);
+    if (state.cache.size >= MAX_CACHE) state.cache.delete(state.cache.keys().next().value);
+    state.cache.set(text, count);
+    return count;
+}
+
 /** Counts stored/source text, never provider output usage. Cache is memory-only and bounded. */
 export async function countTextTokens(value, context) {
     const text = String(value ?? '');
@@ -85,27 +120,11 @@ export async function countTextTokens(value, context) {
     await prepareTokenCounter(current);
     const state = stateOf(current);
     if (state.cache.has(text)) return state.cache.get(text);
-    let count;
-    if (state.mode === 'native') {
-        try {
-            // Bypass ST's text-count cache: it can retain an old byte fallback after assets recover.
-            count = state.nativeVerified ? await encode(current, state.model, text)
-                : await current.getTokenCountAsync?.(text, 0);
-            if (!Number.isFinite(count) || count <= 0) throw new Error('Invalid native count.');
-        } catch {
-            count = undefined;
-            // Native failures can occur after a successful probe. Keep the change visible in the cache key.
-            try { count = await encode(current, 'gpt-4o', text); useMode(state, 'o200k', 'Native counter failed.'); }
-            catch { useMode(state, 'approx', 'Local counters unavailable.'); }
-        }
-    } else if (state.mode === 'o200k') {
-        try { count = await encode(current, 'gpt-4o', text); }
-        catch { useMode(state, 'approx', 'Local o200k counter failed.'); }
-    }
-    count ??= Math.ceil(text.length / 4);
-    if (state.cache.size >= MAX_CACHE) state.cache.delete(state.cache.keys().next().value);
-    state.cache.set(text, count);
-    return count;
+    if (state.inflight.has(text)) return state.inflight.get(text);
+    const pending = countUncached(text, current, state);
+    state.inflight.set(text, pending);
+    try { return await pending; }
+    finally { state.inflight.delete(text); }
 }
 
 /** Same tokenizer as retrieval with explicit approximate chat framing, never ST's stale count cache. */
@@ -113,15 +132,27 @@ export async function countPromptTokens(prompt, context) {
     const current = contextOf(context);
     await prepareTokenCounter(current);
     if (!Array.isArray(prompt)) return countTextTokens(prompt, current);
-    let count = 3;
-    for (const message of prompt) {
-        count += 3;
-        for (const [key, value] of Object.entries(message)) {
-            const text = key === 'content' && Array.isArray(value)
-                ? value.filter(part => part.type === 'text').map(part => part.text).join('\n')
-                : typeof value === 'string' ? value : JSON.stringify(value ?? '');
-            count += await countTextTokens(text, current) + (key === 'name' ? 1 : 0);
+    const scale = tokenCounterKey(current);
+    // Lazily hand fields to a small worker pool; do not retain a second flattened prompt.
+    function* fields() {
+        for (const message of prompt) {
+            for (const [key, value] of Object.entries(message)) {
+                const text = key === 'content' && Array.isArray(value)
+                    ? value.filter(part => part.type === 'text').map(part => part.text).join('\n')
+                    : typeof value === 'string' ? value : JSON.stringify(value ?? '');
+                yield { text, name: key === 'name' ? 1 : 0 };
+            }
         }
     }
-    return count;
+    const iterator = fields();
+    const totals = await Promise.all(Array.from({ length: PROMPT_CONCURRENCY }, async () => {
+        let count = 0;
+        for (let field = iterator.next(); !field.done; field = iterator.next()) {
+            count += await countTextTokens(field.value.text, current) + field.value.name;
+        }
+        return count;
+    }));
+    // If a worker caused fallback, recount earlier fields on that same scale.
+    if (scale !== tokenCounterKey(current)) return countPromptTokens(prompt, current);
+    return 3 + 3 * prompt.length + totals.reduce((sum, count) => sum + count, 0);
 }
