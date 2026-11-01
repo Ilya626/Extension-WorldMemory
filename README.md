@@ -6,11 +6,13 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.9 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.10 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 For Chat Completion, history first uses its configured allowance. After ST assembles the full request, a final local stage measures the remaining space and adds more already ranked history details towards the desired context. It preserves the complete outline, previous details, raw tail, WI and manual settings. Whole passages must fit the remaining space; an already overflowing request is kept whole. Protected exchanges remain outside the desired-context budget. This stage adds no model or embedding calls and does not yet apply to Text Completion. The UI shows the final request separately from the planning allocations.
 
 Already activated character profiles mentioned in the latest exchange are placed before the latest player post. Activation still belongs to SillyTavern. This applies to managed character profiles, author entries explicitly tagged `extensions.worldMemory.type: "character"`, and profiles matching the configured character catalogue. Untyped author lore keeps its configured placement. A managed profile's `Played memory through source message …` line records its update boundary; it is not a separate instruction or search hint. Request placement does not rewrite saved book positions.
+
+Identical character-profile copies in different attached books are inserted once. Different content, keys, conditions and manual metadata remain separate; sticky/cooldown entries retain native ST accounting. PNG restore reuses an identical linked book. Saved books are never deleted or overwritten.
 
 ## Start with the recommended setup
 

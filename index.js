@@ -10,7 +10,7 @@ import { installArchiveRuntime } from './archive-runtime.js';
 import { SUMMARY_PROMPT_KEYS, copyLegacyPrompt, rememberPromptOrigin, describePromptOrigin, resetSummaryPrompts } from './summary-prompt-settings.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
-import { placeSceneProfiles } from './scene-wi.js';
+import { placeSceneProfiles, removeDuplicateProfiles, profileSignature } from './scene-wi.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
 import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
@@ -738,6 +738,7 @@ function renderWIStatus() {
         output.textContent += ` Последний игровой скан ST выбрал ${entries.length}: ${entries.map(entry => `${entry.title || `#${entry.uid}`} (${entry.constant ? 'Constant' : 'условия ST'})`).join('; ') || 'нет записей'}. Это результат сканирования, не подтверждение доставки после окончательной обрезки ST.`;
         const scene = lastNativeWIScan.scene || [];
         if (scene.length) output.textContent += ` Профили сцены перед последним постом игрока: ${scene.map(entry => entry.title || `#${entry.uid}`).join('; ')}. Сохранённые позиции книги не меняются.`;
+        if (lastNativeWIScan.duplicates?.length) output.textContent += ` Точные копии профилей из других книг вставлены один раз: ${lastNativeWIScan.duplicates.map(entry => entry.title || `#${entry.uid}`).join('; ')}. Различающиеся сведения сохранены.`;
     }
 }
 function applyNativeWIBudget() {
@@ -1223,15 +1224,21 @@ async function restoreCardGame(explicit = false) {
         }
         const metadata = structuredClone(game.metadata || {}); delete metadata[OWNER];
         metadata.integrity = crypto.randomUUID();
-        // Import author lore to a new native chat book only when its original link is unavailable.
-        // Existing books are never overwritten by an imported image.
+        // Reuse an identical linked native book; a second book name would activate
+        // every copied profile twice. Different existing books are never overwritten.
         const linked = character.data?.extensions?.world;
         const embeddedChatLore = game.worldInfo?.data;
-        if (embeddedChatLore?.entries || (!nativeWI.world_names?.includes(linked) && character.data?.character_book?.entries?.length)) {
+        const linkedBook = nativeWI.world_names?.includes(linked) ? await nativeWI.loadWorldInfo(linked) : null;
+        check();
+        const embeddedLore = embeddedChatLore?.entries ? embeddedChatLore
+            : !linkedBook && character.data?.character_book?.entries?.length ? nativeWI.convertCharacterBook(character.data.character_book) : null;
+        const bookSignature = book => JSON.stringify(Object.values(book.entries || {}).map(entry => profileSignature(entry, null)).sort());
+        if (embeddedLore && linkedBook && bookSignature(embeddedLore) === bookSignature(linkedBook)) {
+            metadata.world_info = linked;
+        } else if (embeddedLore) {
             const name = `WorldMemory_CardLore_${crypto.randomUUID()}`;
             if (!await nativeWI.createNewWorldInfo(name, { interactive: false })) throw new Error('Could not restore embedded author WI.');
-            check(); await nativeWI.saveWorldInfo(name, embeddedChatLore?.entries
-                ? structuredClone(embeddedChatLore) : nativeWI.convertCharacterBook(character.data.character_book), true);
+            check(); await nativeWI.saveWorldInfo(name, structuredClone(embeddedLore), true);
             check(); metadata.world_info = name;
         } else if (metadata.world_info && !nativeWI.world_names?.includes(metadata.world_info)) delete metadata.world_info;
         if (!nativeWI.world_names?.includes(linked) && metadata.world_info) {
@@ -1446,12 +1453,13 @@ async function init() {
     ctx().eventSource.makeFirst(events.WORLDINFO_ENTRIES_LOADED, injectBook);
     ctx().eventSource.on(events.WORLDINFO_SCAN_DONE, async args => {
         if (args?.state?.next || getSummaryWorldInfoSources() || nativeReferenceScope) return;
+        const duplicates = settings().enabled && args?.activated?.entries ? removeDuplicateProfiles(args.activated.entries, nativeWI.world_info_use_group_scoring) : [];
         const scene = settings().enabled && args?.activated?.entries ? placeSceneProfiles({ activated: args.activated.entries,
             catalogue: args.sortedEntries || [], chat: history?.sceneChat() || ctx().chat, mainNames: state()?.mainNames || [],
             parseRegex: nativeWI.parseRegexFromString, substitute: ctx().substituteParams,
             caseSensitive: nativeWI.world_info_case_sensitive, atDepth: nativeWI.world_info_position.atDepth,
             isActivationReason: key => semanticWI?.isActivationReason(key) }) : [];
-        lastNativeWIScan = { metadata: ctx().chatMetadata, scene, entries: [...(args?.activated?.entries?.values?.() || [])]
+        lastNativeWIScan = { metadata: ctx().chatMetadata, scene, duplicates, entries: [...(args?.activated?.entries?.values?.() || [])]
             .map(entry => ({ uid: entry.uid, title: entry.comment, world: entry.world, constant: entry.constant })) };
         renderWIStatus();
         const metadata = ctx().chatMetadata, text = args?.activated?.text || '', measurement = wiMeasurementSerial;

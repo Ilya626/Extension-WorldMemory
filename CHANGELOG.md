@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.10 — 2026-11-01 — duplicate imported character profiles
+
+- Reuse a linked lorebook when its complete native entries match the embedded chat lore. Keep inherited activation settings distinct from explicit overrides during persistent comparison.
+- Insert identical character-profile copies from different books once after native activation. Preserve different content, settings, unknown/manual metadata and native sticky/cooldown accounting. Saved books are unchanged; names alone never establish identity.
+- Report suppressed profile copies in the WI status. Suppression occurs after native budgeting and does not recover that budget.
+
 ## 0.5.9 — 2026-11-01 — reduce local request assembly work
 
 - Find token-verified source-window boundaries with fewer tokenizer probes; count up to four independent sources concurrently, then assemble documents in original order. Reuse the existing embedding space and cached vectors.
