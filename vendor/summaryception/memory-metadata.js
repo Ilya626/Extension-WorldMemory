@@ -1,3 +1,4 @@
+import { modelJsonBody, parseModelJson, recoverMetadataSections } from '../../model-json.js';
 /** Optional companion metadata. Prose memory remains valid when this tail fails. */
 export const MEMORY_METADATA_TAG = 'memory_metadata';
 export const memoryTextRevision = text => {
@@ -38,56 +39,26 @@ function recoverBoundaryAsterisks(text, source) {
     return matches.length && matches.filter(match => match.text.length === matches[0].text.length).length === 1 ? matches[0] : null;
 }
 
-function parseMetadataObject(text) {
-    try { return JSON.parse(text); }
-    catch (error) {
-        // A completed object may have redundant trailing closing brackets.
-        // Never invent missing values/brackets or repair the object's contents.
-        if (!text.trimStart().startsWith('{')) throw error;
-        const stack = []; let quoted = false, escaped = false;
-        for (let index = 0; index < text.length; index++) {
-            const character = text[index];
-            if (quoted) {
-                if (escaped) escaped = false;
-                else if (character === '\\') escaped = true;
-                else if (character === '"') quoted = false;
-                continue;
-            }
-            if (character === '"') { quoted = true; continue; }
-            if (character === '{' || character === '[') stack.push(character);
-            else if (character === '}' || character === ']') {
-                if (stack.pop() !== (character === '}' ? '{' : '[')) throw error;
-                if (!stack.length) {
-                    if (!/^[}\]\s]*$/.test(text.slice(index + 1))) throw error;
-                    return JSON.parse(text.slice(0, index + 1));
-                }
-            }
-        }
-        throw error;
-    }
-}
-
 export function readMemoryMetadata(value, sources, { backfill = false, extractiveFacts = false } = {}) {
     const text = String(value || '');
     const start = text.indexOf('<memory_metadata>');
     const prose = (start < 0 ? text : text.slice(0, start)).trim();
     const result = { text: backfill ? null : prose, metadata: null, warning: '' };
     // Stage 2 already expects metadata only; a complete JSON response needs no prose delimiter.
-    const bare = backfill && text.trimStart().startsWith('{');
+    const bare = backfill && modelJsonBody(text).startsWith('{');
     let body;
     if (bare) body = text.trim();
     else {
         if (start < 0) { result.warning = 'Optional memory metadata was not returned.'; return result; }
-        if (text.indexOf('<memory_metadata>', start + 1) >= 0) {
-            result.warning = 'Multiple optional metadata tails were ignored; prose was kept.'; return result;
-        }
-        const match = /^<memory_metadata>\s*([\s\S]*?)\s*<\/memory_metadata>\s*$/.exec(text.slice(start));
-        if (!match) { result.warning = 'Optional memory metadata was incomplete; prose was kept.'; return result; }
-        body = match[1];
+        body = text.slice(start);
     }
     let data;
-    try { data = parseMetadataObject(body); }
-    catch { result.warning = 'Optional memory metadata JSON was invalid; prose was kept.'; return result; }
+    try { data = parseModelJson(body); }
+    catch (error) {
+        data = recoverMetadataSections(body);
+        result.warning = `Metadata ${error.message}. Complete sections kept: ${Object.keys(data).join(', ') || 'none'}.`;
+        if (!Object.keys(data).length) return result;
+    }
     const strings = values => Array.isArray(values) && values.every(item => typeof item === 'string' && item.trim());
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         result.warning = 'Optional memory metadata was not an object; prose was kept.'; return result;
@@ -102,8 +73,9 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     const validThread = typeof thread?.text === 'string' && thread.text.trim() && strings(thread.keys);
     const validFacts = Array.isArray(data.facts);
     const validWI = data.wi && typeof data.wi === 'object' && !Array.isArray(data.wi) && Array.isArray(data.wi.updates);
-    if (!validThread || !validFacts) result.warning = 'Some optional navigation metadata was incomplete; prose and other valid parts were kept.';
-    if (data.wi !== undefined && !validWI) result.warning = 'Optional WI output was invalid; prose and navigation metadata were kept.';
+    result.fields = { lprime: Boolean(validThread), facts: validFacts, wi: Boolean(validWI) };
+    if (!validThread || !validFacts) result.warning ||= 'Search navigation fields were incomplete; valid WI and other complete sections were kept.';
+    if (data.wi !== undefined && !validWI) result.warning ||= 'WI schema: expected an object with updates array; valid navigation was kept.';
     if (!validThread && !validFacts && !validWI) return result;
     const handles = new Map(sources.map(source => [source.handle, source.id]));
     const sourceByHandle = new Map(sources.map(source => [source.handle, source]));
@@ -111,14 +83,14 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     for (const fact of validFacts ? data.facts : []) {
         if (typeof fact?.text !== 'string' || !fact.text.trim() || !strings(fact.keys)
             || !strings(fact.src) || !fact.src.length || fact.src.some(handle => !handles.has(handle))) {
-            result.warning = 'Some optional facts had invalid source links and were ignored.'; continue;
+            result.warning ||= 'Some optional facts had invalid source links and were ignored.'; continue;
         }
         let text = fact.text.trim();
         let sourceSpans;
         if (extractiveFacts) {
             const source = sourceByHandle.get(fact.src[0]);
             if (fact.src.length !== 1 || typeof source?.text !== 'string') {
-                result.warning = 'Some optional search excerpts were not exact source text and were ignored.'; continue;
+                result.warning ||= 'Some optional search excerpts were not exact source text and were ignored.'; continue;
             }
             let offset = source.text.indexOf(text);
             if (offset < 0) {
@@ -130,10 +102,10 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
                     if (recovered) { text = recovered.text; offset = recovered.offset; normalizedText = normalizeExcerptDashes(text); }
                 }
                 if (offset < 0) {
-                    result.warning = 'Some optional search excerpts were not exact source text and were ignored.'; continue;
+                    result.warning ||= 'Some optional search excerpts were not exact source text and were ignored.'; continue;
                 }
                 if (normalizedSource.lastIndexOf(normalizedText) !== offset) {
-                    result.warning = 'Some optional search excerpts had ambiguous dash-normalized source matches and were ignored.'; continue;
+                    result.warning ||= 'Some optional search excerpts had ambiguous dash-normalized source matches and were ignored.'; continue;
                 }
                 // Keep only the real contiguous original; the model supplies no offsets or durable IDs.
                 text = source.text.slice(offset, offset + text.length);

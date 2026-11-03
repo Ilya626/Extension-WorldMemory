@@ -33,6 +33,9 @@
       <div class="wm-actions wm-primary-actions"><button id="wm_summarize" class="menu_button" type="button">Summarize</button><button id="wm_stop" class="menu_button" type="button">Stop</button><button id="wm_open" class="menu_button" type="button">Open lorebook</button></div>
       <small class="wm-muted">Резюмирование / Regenerate / Refine блока L0: 2 запроса на пакет — сначала L0 + L″ и сохранение, затем L′ / поиск / WI. Это отдельные фоновые вызовы, не игровой RP-ответ. Ошибка второго этапа не удаляет L0. Инструкции и последние запросы видны в Summarizer connection → Instructions.</small>
       <div id="wm_status" class="wm-status" role="status" aria-live="polite">Loading…</div>
+      <div id="wm_wi_problem" class="wm-status" role="status" aria-live="polite" hidden></div>
+      <div class="wm-actions"><button id="wm_wi_diagnostics" class="menu_button" type="button">Скачать диагностику WI</button><button id="wm_reparse_response" class="menu_button" type="button">Повторить разбор · 0 запросов</button></div>
+      <small class="wm-muted">При ошибке ответ модели сохраняется. Эти кнопки скачивают ответ с причиной ошибки или повторяют его разбор без обращения к модели.</small>
       <div id="wm_history_status" class="wm-muted" role="status" aria-live="polite"></div>
       <div id="wm_prompt_size" class="wm-muted" role="status"></div>
 
@@ -126,6 +129,7 @@
         <label class="checkbox_label"><input id="wm_repeat_metadata" type="checkbox"><span>Повторить уже готовые блоки — новые вызовы модели</span></label>
         <div class="wm-field"><label for="wm_response_tokens">Лимит ответа поиск / WI (0 = из подключения)</label><input id="wm_response_tokens" data-setting="responseTokens" class="text_pole" type="number" min="0" step="512"></div>
         <button id="wm_open_wi_result" class="menu_button" type="button">Открыть WI с результатом</button>
+        <small class="wm-muted">При ошибке ответ второго этапа сохраняется вместе с причиной. Повторный разбор использует этот ответ без запроса к модели; целые секции WI сохраняются независимо от повреждённых поисковых секций. Диагностика собирает ответы и ошибки в один файл, включая после перезагрузки.</small>
         <div class="wm-wi-feedback wm-muted" role="status" aria-live="polite"></div>
         <small class="wm-muted">Обрабатывает исходные сообщения сохранённых L0 через подключение выше. Несжатый хвост сначала должен пройти резюмирование. Без галочки готовые результаты, в том числе пустые, повторно не запрашиваются. С галочкой каждый сохранённый L0 готовится заново; текст L0 не меняется. Stop останавливает обработку. Если лимит ответа мал, поисковые выдержки и профили WI могут не поместиться вместе; исходники не обрезаются.</small>
       </details>

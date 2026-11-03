@@ -45,7 +45,15 @@ function wiCoverage(memory) {
     const prepared = packets.filter(packet => Array.isArray(packet.memoryMetadata?.wi?.updates));
     const empty = prepared.filter(packet => !packet.memoryMetadata.wi.updates.length).length;
     const applied = packets.filter(packet => memory?.wiPackets?.[packet.id]?.status === 'applied').length;
-    return `WI по сохранённым L0: подготовлено ${prepared.length} / ${packets.length}, из них пустых ${empty}; применено ${applied}. Без результата WI: ${packets.length - prepared.length}.`;
+    const savedResponses = packets.filter(packet => packet.annotationResponse).length;
+    return `WI по сохранённым L0: подготовлено ${prepared.length} / ${packets.length}, из них пустых ${empty}; применено ${applied}. Без результата WI: ${packets.length - prepared.length}.${savedResponses ? ` Ответов для проверки: ${savedResponses}; кнопки повторного разбора и диагностики находятся на основной панели.` : ''}`;
+}
+function renderWIProblem(memory = state()) {
+    const output = document.getElementById('wm_wi_problem'); if (!output) return;
+    const failures = Object.values(memory?.archive?.records || {}).filter(record => !record.deleted
+        && record.annotationResponse && (record.annotationError || record.annotationResponse.error));
+    output.hidden = !failures.length;
+    output.textContent = failures.length ? `Требуют проверки: ${failures.length} ответ(ов). ${failures[0].annotationError || failures[0].annotationResponse.error} Целые секции сохранены. Кнопки диагностики и повторного разбора — сразу ниже.` : '';
 }
 const status = text => {
     const node = document.getElementById('wm_status');
@@ -55,6 +63,7 @@ const status = text => {
         : memory?.lastWIWrite ? `Подтверждено на диске · записей WorldMemory: ${memory.lastWIWrite.records}.` : '';
     if (node) node.textContent = pending.length ? `${text}\n${receipt}` : text;
     for (const feedback of document.querySelectorAll('.wm-wi-feedback')) feedback.textContent = `${text}\n${destination} ${receipt}\n${wiCoverage(memory)}`;
+    renderWIProblem(memory);
     renderBusy();
 };
 const settings = () => {
@@ -724,7 +733,7 @@ async function backfillSpine() {
         status(error.message); if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory');
     } finally { history.changed(); renderBusy(); await render(); await renderArchive(); }
 }
-async function backfillMetadata({ force = false } = {}) {
+async function backfillMetadata({ force = false, savedResponsesOnly = false } = {}) {
     if (busy) return;
     if (!bridge()?.backfillMemoryMetadata) { status('Archive runtime is not ready. Reload ST.'); return; }
     if (!ctx().chatId) { status('Open a character chat first.'); return; }
@@ -734,10 +743,10 @@ async function backfillMetadata({ force = false } = {}) {
         // The archive writer owns its reservation/controller. WI references can
         // still be prepared locally; they must not see a self-imposed WI busy.
         if (settings().auto && chatWorldInfo(ctx())) await getBook(true);
-        const result = await bridge().backfillMemoryMetadata({ force, responseTokens: settings().responseTokens,
-            onProgress: progress => status(`Подготовка поиска / WI: блок ${progress.saved + 1} / ${progress.total} · ${progress.sourceStatus === 'summary-only' ? 'без исходников; новые WI не создаются' : 'полные исходные сообщения'}`) });
-        status(result.total ? `Saved metadata for ${result.saved} L0 packet(s). ${result.summaryOnly} summary-only. ${result.warnings} with ignored excerpts. L0 text was kept.`
-            : 'All saved L0 packets already have current L′ / search metadata.');
+        const result = await bridge().backfillMemoryMetadata({ force, savedResponsesOnly, responseTokens: settings().responseTokens,
+            onProgress: progress => status(`Подготовка поиска / WI: блок ${progress.saved + (progress.failed || 0) + 1} / ${progress.total} · ${progress.sourceStatus === 'summary-only' ? 'без исходников; новые WI не создаются' : 'полные исходные сообщения'}`) });
+        status(result.total ? `${savedResponsesOnly ? 'Повторный разбор сохранённых ответов, без API. ' : ''}Сохранено блоков: ${result.saved} / ${result.total}; требуют проверки: ${result.warnings}; не разобрано: ${result.failed || 0}. L0 не менялся.`
+            : savedResponsesOnly ? 'Нет сохранённых ошибочных ответов для повторного разбора. Запросов к API не было.' : 'All saved L0 packets already have current L′ / search metadata.');
     } catch (error) {
         const progress = error.metadataProgress;
         status(`${progress ? `Обработано ${progress.saved} / ${progress.total} блоков. Остановка на ${progress.packetId}; оставшиеся не обработаны. ` : ''}${error.message}`);
@@ -757,7 +766,7 @@ function schedule() {
 }
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
-    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
+    $('#wm_update, #wm_retry_saved_wi, #wm_reparse_response, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
@@ -955,6 +964,7 @@ function renderSummaryPrompts() {
 }
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
+    renderWIProblem(memory);
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
     const embedded = character?.data?.extensions?.worldMemoryBackup;
@@ -1072,6 +1082,20 @@ async function applySettings({ nativeWIBudget = false } = {}) {
 function download(name, data) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function downloadWIDiagnostics() {
+    const context = ctx(), memory = state();
+    if (!context.chatId || !memory) { status('Откройте чат для диагностики WI.'); return; }
+    const failures = Object.values(memory.archive?.records || {}).filter(record => !record.deleted
+        && (record.annotationResponse || record.annotationError)).map(record => ({ packetId: record.id,
+        annotationStatus: record.annotationStatus, error: record.annotationError || record.annotationResponse?.error, response: record.annotationResponse || null }));
+    const requests = archiveRuntime.inspectPrompts().requests.filter(request => request.stage === 'metadata' || request.stage === 'legacy-wi');
+    download(`WorldMemory-WI-diagnostics-${Date.now()}.json`, { format: 'world-memory-wi-diagnostics-v1',
+        version: VERSION, createdAt: new Date().toISOString(), selectedBook: chatWorldInfo(context), destinationBook: memory.book,
+        coverage: wiCoverage(memory), failures, requests });
+    status(failures.some(item => item.response) || requests.some(item => item.responseText)
+        ? 'Диагностика WI скачана: ответы модели, причины ошибок и запросы. Файл содержит текст вашей игры; поля API-подключения не включены.'
+        : 'Диагностика скачана, но сырого ответа здесь ещё нет. Новые ошибки подготовки будут сохранять ответ автоматически, в том числе после перезагрузки.');
 }
 async function exportBackup() {
     const context = ctx(), metadata = context.chatMetadata, memory = state();
@@ -1552,6 +1576,8 @@ async function init() {
         status('Stage 1 now uses the displayed built-in WorldMemory prompts. Stage 2 was not changed.');
     });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
+    $('#wm_reparse_response').on('click', () => { void backfillMetadata({ force: true, savedResponsesOnly: true }); });
+    $('#wm_wi_diagnostics').on('click', () => { void downloadWIDiagnostics().catch(error => status(error.message)); });
     $('#wm_backfill_metadata').on('click', () => {
         const repeat = document.getElementById('wm_repeat_metadata'), force = repeat.checked;
         repeat.checked = false;

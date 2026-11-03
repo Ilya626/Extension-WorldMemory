@@ -11,6 +11,7 @@ import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './st
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
+import { readSummaryWI } from './memory.js';
 
 const CONTINUITY = `The previous_l0 (or prior_context) is the COMPLETE immediately preceding saved L0, supplied as continuity context and a style example. Continue its narrative thread with the new source packet. Preserve necessary referents and unresolved conditions without recopying the whole previous summary. For the first packet there is no previous L0.
 Only new_sources (or passage_in_question) are witnesses for this packet's new events, search excerpts and WI contributions. previous_l0 is a saved account, not an additional source handle or independent proof. Do not turn its claims into newly observed events. Preserve thoughts versus speech, plans versus outcomes, attribution, identity and limiting conditions. Do not continue the roleplay.`;
@@ -129,7 +130,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const result = await wait(sendRequest(selected, systemPrompt, prompt,
                 { signal: owner.controller.signal, returnDetails: true, onActivity: activity }), owner);
             guard(owner); trace.responseText = result.text || ''; trace.status = 'complete'; return { ...result, text: clean(result.text || '') };
-        } catch (error) { trace.status = 'error'; throw error; }
+        } catch (error) { trace.status = 'error'; trace.error = error.message; throw error; }
         finally { clearTimeout(idle); notifyRequest(); }
     }
     const view = archive => ({ layers: [readArchive(archive)],
@@ -277,12 +278,26 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         guard(owner);
         const before = JSON.stringify(record), localSources = metadataSources(sources);
         const savedFingerprint = snapshot({ effective: false }).packets.find(packet => packet.id === record.id)?.sourceFingerprints || {};
+        let received = null;
         try {
-            const wi = await references(owner, sources, record.text, record.id);
-            let knowledge = null;
+            const sourceFingerprints = sources.length ? fingerprints(owner, sources) : savedFingerprint;
+            const cached = options.savedResponse ? record.annotationResponse : null;
+            if (options.savedResponse && (!cached || cached.textRevision !== memoryTextRevision(record.text)
+                || JSON.stringify(cached.sourceFingerprints) !== JSON.stringify(sourceFingerprints)))
+                throw new Error('Saved response sources or L0 changed. It was retained for diagnostics; no model request was made.');
+            const currentWI = ctx().chatMetadata.worldMemory;
+            if (cached?.wiContext && (cached.wiContext.authorBook !== chatWorldInfo(ctx())
+                || cached.wiContext.owner !== currentWI?.owner || cached.wiContext.book !== currentWI?.book))
+                throw new Error('Saved response belongs to a different WI binding. No WI was changed and no model request was made.');
+            const wi = cached ? (cached.wiRequested ? { context: {}, stamp: cached.wiContext } : null)
+                : await references(owner, sources, record.text, record.id);
+            let knowledge = null, cachedKnowledgeChanged = false;
             if (config().knowledgeBoundaries && sources.length && prepareKnowledge) try {
                 knowledge = await wait(Promise.resolve(prepareKnowledge({ before: Math.min(...sources.map(source => source.index)) })), owner); guard(owner);
             } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Saved L0 and ordinary metadata are kept.`); }
+            if (cached && cached.knowledgeCharacters !== JSON.stringify(knowledge?.knowledge_characters || [])) {
+                knowledge = null; cachedKnowledgeChanged = true;
+            }
             const system = metadataSystem(wi?.systemPrompt, Boolean(knowledge?.knowledge_characters?.length));
             const prompt = JSON.stringify({ task: 'Annotate this already saved L0. Do not regenerate or rewrite its prose.',
                 saved_summary: record.text, source_status: sources.length ? 'linked' : 'summary-only',
@@ -291,10 +306,25 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 ...(knowledge?.knowledge_characters?.length ? { knowledge_context: {
                     knowledge_characters: knowledge.knowledge_characters, known_topics: knowledge.known_topics || [] } } : {}) });
             status('Stage 2: preparing search metadata and WI for saved L0.');
-            const response = await transport(owner, system, prompt, { ...options, stage: 'metadata' });
+            const response = cached ? { text: cached.text, usage: cached.usage, tokenCount: cached.tokenCount }
+                : await transport(owner, system, prompt, { ...options, stage: 'metadata' });
             guard(owner); if (sources.length) checkSources(owner, sources);
             if (JSON.stringify(readPacket(owner.archive, record.id)) !== before) throw new Error('Saved L0 changed during annotation. Response not applied.');
+            received = cached || { text: response.text, usage: response.usage || null, tokenCount: response.tokenCount ?? null,
+                textRevision: memoryTextRevision(record.text), sourceFingerprints, wiRequested: Boolean(wi?.context),
+                wiContext: wi?.stamp || null, savedAt: Date.now(), systemPrompt: system, userPrompt: prompt,
+                knowledgeCharacters: JSON.stringify(knowledge?.knowledge_characters || []) };
             const parsed = readMemoryMetadata(response.text, localSources, { backfill: true, extractiveFacts: true });
+            if (cachedKnowledgeChanged) parsed.warning = [parsed.warning,
+                'Character knowledge mapping changed; saved hints were kept and old actor handles were not reassigned.'].filter(Boolean).join(' ');
+            if (parsed.metadata?.wi) try { readSummaryWI(parsed.metadata.wi); }
+            catch (error) {
+                delete parsed.metadata.wi;
+                parsed.warning = [parsed.warning, `WI schema: ${error.message}`].filter(Boolean).join(' ');
+            }
+            const trace = requestTrace.findLast(item => item.metadata === owner.metadata && item.trace.stage === 'metadata'
+                && item.trace.responseText === response.text)?.trace;
+            if (trace) { trace.parseWarning = parsed.warning || null; notifyRequest(); }
             if (!parsed.metadata) throw new Error(parsed.warning || 'No usable metadata returned. L0 is saved; retry metadata backfill only.');
             if (parsed.warning) warn(parsed.warning);
             const boundaries = knowledge ? readKnowledgeBoundaries({ epistemic: parsed.epistemic }, localSources,
@@ -314,9 +344,19 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 epistemicWarnings: boundaries.warnings,
                 epistemicPrepared: Boolean(knowledge?.knowledge_characters?.length && Array.isArray(parsed.epistemic)
                     && (parsed.epistemic.length === 0 || boundaries.epistemic?.length) && !boundaries.warnings.length),
-                sourceFingerprints: sources.length ? fingerprints(owner, sources) : savedFingerprint,
+                sourceFingerprints,
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
                 ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
+            const previous = record.memoryMetadata;
+            if (previous?.textRevision === metadata.textRevision
+                && JSON.stringify(previous.sourceFingerprints) === JSON.stringify(sourceFingerprints)) {
+                if (!parsed.fields?.lprime) metadata.lprime = previous.lprime;
+                if (!parsed.fields?.facts) metadata.facts = previous.facts;
+                if (wi && !metadata.wi && previous.wi && previous.wiContext?.owner === wi.stamp?.owner
+                    && previous.wiContext?.book === wi.stamp?.book && previous.wiContext?.authorBook === wi.stamp?.authorBook) {
+                    metadata.wi = previous.wi; metadata.wiContext = previous.wiContext; metadata.wiStatus = 'preserved';
+                }
+            }
             if (!sources.length || !wi?.context || (wi.stamp?.authorBook !== undefined && wi.stamp.authorBook !== chatWorldInfo(ctx()))) {
                 delete metadata.wi;
                 if (wi) metadata.wiStatus = 'blocked';
@@ -325,6 +365,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const complete = !parsed.warning && Boolean(metadata.lprime?.text && (!wi || metadata.wi));
             putPacket(owner.archive, { ...record, memoryMetadata: metadata, annotationStatus: complete ? 'complete' : 'partial',
                 annotationError: parsed.warning || (complete ? null : 'Some optional metadata is missing; retry stage 2 only.'),
+                annotationResponse: complete && !boundaries.warnings.length && !awareness.warnings.length ? null
+                    : { ...received, error: [parsed.warning, ...boundaries.warnings, ...awareness.warnings].filter(Boolean).join(' ')
+                        || 'Some requested metadata fields need review.' },
                 annotationUsage: response.usage || null, annotationTokenCount: response.tokenCount ?? null });
             await persist(owner, 'metadata-only', record.id);
             const packet = readPacket(owner.archive, record.id);
@@ -333,7 +376,8 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             // Stage 1 is already durable. Mark a retryable annotation without overwriting later edits.
             if (!owner.controller.signal.aborted && ctx().chatMetadata === owner.metadata && getArchive() === owner.archive
                 && JSON.stringify(readPacket(owner.archive, record.id)) === before) {
-                putPacket(owner.archive, { ...record, annotationStatus: 'pending', annotationError: error.message });
+                putPacket(owner.archive, { ...record, annotationStatus: 'pending', annotationError: error.message,
+                    ...(received ? { annotationResponse: { ...received, error: error.message } } : {}) });
                 await persist(owner, 'annotation-pending', record.id);
             }
             throw error;
@@ -426,7 +470,8 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             } catch (error) { guard(owner); warn(`Knowledge references unavailable: ${error.message}. Ordinary metadata remains available.`); }
             const selected = options.packetIds || (options.packetId ? [options.packetId] : null);
             const pending = snapshot({ effective: false }).packets.filter(packet =>
-                (!selected || selected.includes(packet.id)) && (options.force || packet.annotationStatus === 'pending'
+                (!selected || selected.includes(packet.id)) && (!options.savedResponsesOnly || packet.annotationResponse)
+                && (options.force || packet.annotationStatus === 'pending'
                 || packet.annotationStatus === 'partial' || packet.annotationError || !packet.memoryMetadata?.lprime?.text
                 || (hasKnowledgeCharacters && !packet.stale && packet.sourceStatus === 'linked'
                     && !packet.memoryMetadata?.awarenessPrepared)
@@ -434,7 +479,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 || (packet.memoryMetadata.sourceStatus === 'summary-only' && !packet.stale && packet.sourceStatus === 'linked')
                 || (options.includeWI !== false && config().auto !== false && prepareReferences && !packet.stale
                     && packet.sourceStatus === 'linked' && !packet.memoryMetadata.wi)));
-            const result = { saved: 0, summaryOnly: 0, warnings: 0, total: pending.length };
+            const result = { saved: 0, summaryOnly: 0, warnings: 0, failed: 0, total: pending.length };
             for (const packet of pending) {
                 guard(owner);
                 const record = readPacket(owner.archive, packet.id);
@@ -442,8 +487,12 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 const sources = linked ? originals(owner, record.sourceMessageIds) : [];
                 options.onProgress?.({ ...result, packetId: packet.id, sourceStatus: linked ? 'linked' : 'summary-only' });
                 let detail;
-                try { detail = await annotate(owner, record, sources, { responseTokens: options.responseTokens, onActivity: options.onActivity }); }
-                catch (error) { error.metadataProgress = { ...result, packetId: packet.id }; throw error; }
+                try { detail = await annotate(owner, record, sources, { responseTokens: options.responseTokens,
+                    savedResponse: options.savedResponsesOnly, onActivity: options.onActivity }); }
+                catch (error) {
+                    if (options.savedResponsesOnly && !owner.controller.signal.aborted) { result.failed++; continue; }
+                    error.metadataProgress = { ...result, packetId: packet.id }; throw error;
+                }
                 result.saved++; if (!linked) result.summaryOnly++;
                 if (detail.warning) result.warnings++;
             }
