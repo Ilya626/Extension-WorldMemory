@@ -137,9 +137,72 @@ function unchanged(metadata) {
     if (updateAuthorBook !== null && chatWorldInfo(ctx()) !== updateAuthorBook)
         throw new Error('The chat WI selection changed. The result was not written; retry with the current linked book.');
 }
+async function writeNativeBook(name, book, check = () => {}) {
+    check();
+    const expected = signature(book);
+    await nativeWI.saveWorldInfo(name, book, true);
+    check();
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: ctx().getRequestHeaders(),
+        body: JSON.stringify({ name }) });
+    check();
+    const saved = response.ok ? await response.json() : null;
+    check();
+    if (!saved || signature(saved) !== expected) {
+        nativeWI.worldInfoCache?.delete(name);
+        throw new Error(`WI was not confirmed on disk: ${name}${response.ok ? '' : ` (HTTP ${response.status})`}. Saved L0 is kept; retry the saved WI result.`);
+    }
+    return saved;
+}
+async function adoptSelectedBook(memory, name) {
+    const context = ctx(), oldName = memory.book || memory.cloneFrom, oldOwner = memory.cloneOwner || memory.owner;
+    const check = () => {
+        controller?.signal.throwIfAborted();
+        if (ctx().chatMetadata !== context.chatMetadata || ctx().chat !== context.chat || state() !== memory
+            || (memory.book || memory.cloneFrom) !== oldName || chatWorldInfo(ctx()) !== name)
+            throw new Error('Chat or selected WI changed during transfer. Previous memory was kept.');
+    };
+    const target = await nativeWI.loadWorldInfo(name); check();
+    if (!target?.entries) throw new Error(`Selected WI is missing: ${name}. Choose an existing book; no other book was substituted.`);
+    const old = oldName ? await nativeWI.loadWorldInfo(oldName) : null; check();
+    if (oldName && !old?.entries) throw new Error(`Previous memory book is missing: ${oldName}. Restore it before transferring its records.`);
+    const next = structuredClone(target), uidMap = {}, used = new Set();
+    for (const entry of ownedEntries(old, oldOwner)) {
+        const meta = entryMeta(entry);
+        const existing = ownedEntries(next, memory.owner).find(row => !used.has(row.uid)
+            && (meta.knowledgeInstance ? entryMeta(row).knowledgeInstance === meta.knowledgeInstance
+                : normalize(row.comment) === normalize(entry.comment) && entryMeta(row).type === meta.type));
+        const uid = existing?.uid ?? nativeWI.createWorldInfoEntry(name, next)?.uid;
+        if (uid === undefined) throw new Error('ST could not allocate a WI UID during transfer. Previous memory was kept.');
+        used.add(uid); uidMap[entry.uid] = uid;
+        if (existing && detectManual(existing)) continue;
+        next.entries[uid] = { ...structuredClone(entry), uid };
+        entryMeta(next.entries[uid]).owner = memory.owner;
+    }
+    await writeNativeBook(name, next, check); check();
+    // Commit the pointer only after the target really exists on disk. Old book is retained.
+    memory.book = name; delete memory.cloneFrom; delete memory.cloneOwner;
+    if (oldName) {
+        rebindKnowledgeIdentities(memory.archive, { book: old, world: oldName, owner: oldOwner },
+            { book: next, world: name, owner: memory.owner }, uidMap);
+        for (const record of Object.values(memory.archive?.records || {})) {
+            const stamp = record.memoryMetadata?.wiContext;
+            if (stamp?.owner !== oldOwner || stamp.book !== oldName) continue;
+            stamp.owner = memory.owner; stamp.book = name;
+            stamp.referenceUIDs = (stamp.referenceUIDs || []).map(uid => uidMap[uid] ?? uid);
+            stamp.entryRevisions = Object.fromEntries(Object.entries(stamp.entryRevisions || {}).map(([uid, revision]) => [uidMap[uid] ?? uid, revision]));
+            for (const update of record.memoryMetadata?.wi?.updates || []) if (update.uid !== null && uidMap[update.uid] !== undefined) update.uid = uidMap[update.uid];
+        }
+        for (const packet of bridge().snapshot().packets) if (memory.wiPackets?.[packet.id]?.status === 'applied')
+            memory.wiPackets[packet.id].revision = compactRevision([packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+    }
+    memory.lastWIWrite = { book: name, records: ownedEntries(next, memory.owner).length, at: Date.now() };
+    await saveState();
+}
 async function getBook(create = false) {
     const memory = state();
     if (!memory) throw new Error('Open a character chat first.');
+    const selected = chatWorldInfo(ctx());
+    if (create && selected && memory.book !== selected) await adoptSelectedBook(memory, selected);
     if (!memory.book && !create) return null;
     if (!memory.book) {
         const metadata = ctx().chatMetadata, chat = ctx().chat, owner = memory.owner;
@@ -219,20 +282,7 @@ async function saveBook(book, metadata, baseBook = null) {
         }
     }
     check();
-    const expected = signature(book);
-    await nativeWI.saveWorldInfo(name, book, true);
-    check();
-    // ST updates its cache before writing and does not reject HTTP error codes.
-    // Read the server, not that cache, before reporting a successful WI update.
-    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: context.getRequestHeaders(),
-        body: JSON.stringify({ name }) });
-    check();
-    const saved = response.ok ? await response.json() : null;
-    check();
-    if (!saved || signature(saved) !== expected) {
-        nativeWI.worldInfoCache?.delete(name);
-        throw new Error(`WI was not confirmed on disk: ${name}${response.ok ? '' : ` (HTTP ${response.status})`}. Saved L0 is kept; retry the saved WI result.`);
-    }
+    const saved = await writeNativeBook(name, book, check);
     memory.lastWIWrite = { book: name, records: ownedEntries(saved, owner).length, at: Date.now() };
     await context.saveMetadata();
     check();
@@ -288,6 +338,7 @@ async function injectBook(payload) {
     const present = new Set(['globalLore', 'characterLore', 'chatLore', 'personaLore']
         .flatMap(key => payload[key] || []).map(entry => `${entry.world}.${entry.uid}`));
     for (const entry of Object.values(book.entries || {})) {
+        if (entryMeta(entry)?.owner && entryMeta(entry).owner !== state().owner) continue;
         if (!entry.content?.trim() || present.has(`${world}.${entry.uid}`)) continue;
         payload.chatLore.push({ ...structuredClone(entry), world });
     }
@@ -397,8 +448,9 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
         for (const entry of entries) entryRevisions[entry.uid] = evidenceRevision(entry, omit);
         let used = await tokens(JSON.stringify(index)); guard();
         for (const entry of ordered) {
-            if (detectManual(entry)) continue;
-            const row = { uid: entry.uid, name: entry.comment, retained_facts: retainedFacts(entry, omit).map(({ order, facts }) => ({ order, facts })) };
+            const row = detectManual(entry)
+                ? { uid: entry.uid, name: entry.comment, manual: true, readonly_content: entry.content }
+                : { uid: entry.uid, name: entry.comment, retained_facts: retainedFacts(entry, omit).map(({ order, facts }) => ({ order, facts })) };
             const size = await tokens(JSON.stringify(row)); guard();
             if (used + size > settings().referenceTokens) continue;
             references.push(row); referenceUIDs.push(entry.uid); entryRevisions[entry.uid] = evidenceRevision(entry, omit); used += size;
@@ -412,7 +464,7 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
             try {
                 nativeReference = await collectSummaryWorldInfo(originals.join('\n\n'), existingSummary || '', {
                     maxTokens: summaryWorldInfoBudget(settings()), sourceMessages: originals,
-                    excludeBooks: [scope.book], signal,
+                    signal,
                 });
             } catch (error) {
                 if (signal?.aborted) throw error;
@@ -578,13 +630,15 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         status('Memory or RP generation is busy. Wait for it to finish or press Stop.');
         return;
     }
-    const snapshot = bridge().snapshot(), metadata = snapshot.metadata;
+    let snapshot = bridge().snapshot();
+    const metadata = snapshot.metadata;
     if (!snapshot.chatId) { status('Open a character chat first.'); return; }
     busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = cleanupOnly ? null : requireChatWorldInfo(ctx());
         let book = await getBook(!cleanupOnly);
         if (!book) return;
+        snapshot = bridge().snapshot();
         if (!cleanupOnly) {
             const beforeNames = structuredClone(book); syncMainNames(book);
             book = await saveBook(book, metadata, beforeNames);
@@ -670,6 +724,7 @@ async function backfillMetadata() {
     try {
         // The archive writer owns its reservation/controller. WI references can
         // still be prepared locally; they must not see a self-imposed WI busy.
+        if (settings().auto && chatWorldInfo(ctx())) await getBook(true);
         const result = await bridge().backfillMemoryMetadata({ responseTokens: settings().responseTokens,
             onProgress: progress => status(`Building L′ / search excerpts ${progress.saved + 1} / ${progress.total} · ${progress.sourceStatus === 'summary-only' ? 'summary only; originals unavailable or changed' : 'complete original packet'}`) });
         status(result.total ? `Saved metadata for ${result.saved} L0 packet(s). ${result.summaryOnly} summary-only. ${result.warnings} with ignored excerpts. L0 text was kept.`
@@ -901,14 +956,16 @@ async function render() {
     scheduleContextStatistics();
     const integration = globalThis.RussianWIForms?.getStatus?.();
     document.getElementById('wm_integration').textContent = `Archive: ${bridge()?.version || 'loading'} · Russian WI: ${integration ? integration.enabled ? integration.ready ? 'ready' : 'loading dictionary' : 'disabled' : 'not loaded (optional)'}`;
-    document.getElementById('wm_book').textContent = memory?.book ? `Generated memory destination: ${memory.book}` : 'Generated memory uses a separate chat-scoped book, never the active editor book.';
+    document.getElementById('wm_book').textContent = chatWorldInfo(ctx())
+        ? `Книга записи: ${chatWorldInfo(ctx())}. Ручные записи сохраняются.`
+        : 'Выберите WI этого чата: запись в случайный или активный ворлдбук не выполняется.';
     const cardWI = document.getElementById('wm_card_wi'), linkedWI = chatWorldInfo(ctx());
     cardWI.replaceChildren(new Option('Не выбран — выберите WI для этого чата', ''),
         ...(nativeWI.world_names || []).map(name => new Option(name, name)));
     cardWI.value = linkedWI;
     document.getElementById('wm_card_wi_status').textContent = linkedWI
         ? (nativeWI.world_names || []).includes(linkedWI)
-            ? `WI этого чата: ${linkedWI}. Сохранено для этого чата; карточка и глобальные WI не меняются.`
+            ? `Результат будет записан в ${linkedWI}. Ручные записи не перезаписываются; карточка и глобальные WI не меняются.`
             : `Выбранная книга ${linkedWI} отсутствует. Выберите другую; автоматической подмены нет.`
         : 'WI этого чата не выбран. История сохраняется; подготовка WI ждёт выбора. Книга из карточки или активного списка не подставляется.';
     const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status !== 'applied');
@@ -1051,10 +1108,16 @@ async function selectChatWI() {
     if (!memory) throw new Error('Open a chat first.');
     const name = document.getElementById('wm_card_wi').value;
     if (name && !nativeWI.world_names.includes(name)) throw new Error('Choose an existing World Info book. Create or import one in ST World Info first.');
-    memory.wiSourceBook = name;
-    await saveState();
-    await render();
-    status(name ? `WI этого чата сохранён: ${name}. Карточка и глобальные WI не менялись.` : 'WI этого чата отключён. История сохранена; чужая книга не подставляется.');
+    clearTimeout(timer); archiveRuntime.stop();
+    busy = true; controller = new AbortController(); renderBusy();
+    try {
+        memory.wiSourceBook = name;
+        await saveState();
+        if (name) await getBook(true);
+        status(name ? `Книга записи WI этого чата: ${name}. Существующие записи сохранены.` : 'WI этого чата отключён. История сохранена; чужая книга не подставляется.');
+    } finally {
+        controller = null; busy = false; renderBusy(); await render();
+    }
 }
 function selectedCardAvatar() {
     const context = ctx(), avatar = context.characters[context.characterId]?.avatar;

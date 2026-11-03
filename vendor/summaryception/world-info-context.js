@@ -136,7 +136,10 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
     };
     scanning = true;
     sourceBook = book;
-    sourceEntries = Object.entries(bookData.entries || {}).map(([uid, entry]) => ({ ...entry, uid: entry.uid ?? uid, world: book }));
+    // Managed profiles already enter through their source-linked catalogue.
+    // Do not feed generated state back as independent author lore.
+    sourceEntries = Object.entries(bookData.entries || {}).filter(([, entry]) => !entry.extensions?.worldMemory?.owner)
+        .map(([uid, entry]) => ({ ...entry, uid: entry.uid ?? uid, world: book }));
     sourceSignal = options.signal;
     sourceScope = Object.freeze([]);
     try {

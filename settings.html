@@ -4,7 +4,7 @@
     <div class="inline-drawer-content">
       <p class="wm-muted">Keep the whole story in view: a complete outline with relevant original passages, plus recent chat.</p>
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
-      <div class="wm-field"><label for="wm_card_wi">WI этого чата · источник лора (только чтение)</label><select id="wm_card_wi" class="text_pole"></select></div>
+      <div class="wm-field"><label for="wm_card_wi">WI этого чата · куда записывать результат</label><select id="wm_card_wi" class="text_pole"></select></div>
       <div id="wm_card_wi_status" class="wm-muted"></div>
       <section id="wm_card_resume_panel" hidden>
         <div id="wm_card_resume_status" class="wm-muted" role="status" aria-live="polite"></div>
@@ -152,7 +152,7 @@
       </details>
 
       <details class="wm-section"><summary>World Info · entity reference</summary>
-        <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. Generated WI uses a separate chat-scoped lorebook and native activation rules and budget. Original lorebooks stay intact.</p>
+        <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. Generated records are saved to the explicitly selected WI этого чата. Existing manual entries are kept; other books are not edited.</p>
         <label class="checkbox_label"><input id="wm_auto" data-setting="auto" type="checkbox"><span>Prepare and apply WI after saving L0</span></label>
         <details class="wm-advanced"><summary>Experimental NPC information events and graph</summary>
         <label class="checkbox_label"><input id="wm_knowledge_boundaries" data-setting="knowledgeBoundaries" type="checkbox"><span>Track NPC information events (experimental)</span></label>

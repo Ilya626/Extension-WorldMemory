@@ -58,15 +58,16 @@ export function buildKnowledgeContext({ book, world, owner } = {}) {
  * Rebind only identities that resolve in BOTH books; stale/deleted instances
  * remain stored and ineligible rather than being adopted by a matching UID.
  */
-export function rebindKnowledgeIdentities(archive, from, to) {
+export function rebindKnowledgeIdentities(archive, from, to, uidMap = null) {
     const previous = buildKnowledgeContext(from), next = buildKnowledgeContext(to);
     const move = actor => {
         if (!actor?.character) return null;
         const old = previous.resolveCharacter(actor.who, null, actor.character);
         if (!old) return null;
-        const target = next.resolveCharacter(`c${old.uid}`);
+        const targetUid = uidMap?.[old.uid] ?? old.uid;
+        const target = next.resolveCharacter(`c${targetUid}`);
         const oldEntry = Object.values(from.book?.entries || {}).find(entry => entry.uid === old.uid);
-        const newEntry = Object.values(to.book?.entries || {}).find(entry => entry.uid === old.uid);
+        const newEntry = Object.values(to.book?.entries || {}).find(entry => entry.uid === targetUid);
         if (!target || entryMeta(oldEntry)?.knowledgeInstance !== entryMeta(newEntry)?.knowledgeInstance) return null;
         return { ...actor, who: `c${target.uid}`, character: target };
     };
