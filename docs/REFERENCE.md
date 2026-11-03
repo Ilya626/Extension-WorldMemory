@@ -11,7 +11,9 @@ Each new packet follows two requests through the summarizer connection:
 
 Active native WI can be supplied read-only to both stages under **Summarizer connection → Advanced summarizer context**. The managed UID/reference catalogue also includes inactive entries, so a record need not be activated in the current prompt to be found and updated as an existing subject. Existing references help identify subjects; they do not prove new events.
 
-If stage 2 fails, the saved L0 stays available and its annotation is marked pending/partial. Retry that step rather than paying to regenerate correct prose. Applying a saved WI result is local and needs no model request. **Stop** cancels current work while retaining completed saves.
+If stage 2 fails, the saved L0 stays available and its annotation is marked pending/partial. Retry that step rather than paying to regenerate correct prose. A partial excerpt rejection preserves valid WI and allows the remaining source packets to proceed; a hard request/parse failure stops the run. Applying a saved WI result is local and needs no model request. **Stop** cancels current work while retaining completed saves.
+
+With automatic WI and linked originals, stage 2 requires the WI field and checks subjects across the complete packet; unsupported claims and read-only manual records are excluded. Coverage feedback distinguishes prepared, empty, applied and missing WI results. Empty completed results do not cause automatic model retries: the explicit repeat checkbox reprocesses saved blocks. The shared stage-2/legacy output override is beside preparation. Non-streaming requests allow 300 seconds for a response, while streaming uses a 120-second inactivity limit.
 
 **Summarizer connection → Advanced summary prompts** lets you edit migrated or custom L0 instructions. Blank fields use the built-in prompts. In the user template, `{{story_txt}}` is the new source packet, `{{context_str}}` is the complete previous L0, and `{{player_name}}` is the player name. These settings do not change the separate search-note / WI format.
 

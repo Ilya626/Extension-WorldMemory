@@ -123,9 +123,11 @@
         <button id="wm_backfill_spine" class="menu_button" type="button">Prepare missing story skeleton</button>
         <small class="wm-muted">New L0 replies include their skeleton in the same response. Old records need one preparation request each; L0 text is kept. Until prepared, their full saved account is used and may exceed the soft target. Manual text remains authoritative.</small>
         <div class="wm-actions"><button id="wm_backfill_metadata" class="menu_button" type="button">Prepare search / WI · stage 2 only</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
+        <label class="checkbox_label"><input id="wm_repeat_metadata" type="checkbox"><span>Повторить уже готовые блоки — новые вызовы модели</span></label>
+        <div class="wm-field"><label for="wm_response_tokens">Лимит ответа поиск / WI (0 = из подключения)</label><input id="wm_response_tokens" data-setting="responseTokens" class="text_pole" type="number" min="0" step="512"></div>
         <button id="wm_open_wi_result" class="menu_button" type="button">Открыть WI с результатом</button>
         <div class="wm-wi-feedback wm-muted" role="status" aria-live="polite"></div>
-        <small class="wm-muted">Resumes the second step for saved L0 records without rewriting them. Uses the summarizer connection above. Stop cancels processing.</small>
+        <small class="wm-muted">Обрабатывает исходные сообщения сохранённых L0 через подключение выше. Несжатый хвост сначала должен пройти резюмирование. Без галочки готовые результаты, в том числе пустые, повторно не запрашиваются. С галочкой каждый сохранённый L0 готовится заново; текст L0 не меняется. Stop останавливает обработку. Если лимит ответа мал, поисковые выдержки и профили WI могут не поместиться вместе; исходники не обрезаются.</small>
       </details>
 
       <details class="wm-section wm-secondary"><summary id="wm_history_heading">History processing and insertion</summary>
@@ -184,7 +186,6 @@
           <small class="wm-muted">A semantic match adds one temporary keyword and can add one point to ST group scoring. Replies search the current player post; background WI scans search their selected sources. ST still checks conditions, groups and budgets.</small>
           <div class="wm-field"><label for="wm_language">WI entry language</label><select id="wm_language" data-setting="language" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Russian</option></select></div>
           <div class="wm-field"><label for="wm_target">Target tokens per entry (writing guidance)</label><input id="wm_target" data-setting="targetTokens" class="text_pole" type="number" min="40" step="20"></div>
-          <div class="wm-field"><label for="wm_response_tokens">Legacy WI response tokens (0 = connection default)</label><input id="wm_response_tokens" data-setting="responseTokens" class="text_pole" type="number" min="0" step="512"></div>
           <div class="wm-field"><label for="wm_detail_budget">Original-message detail tokens per legacy packet</label><input id="wm_detail_budget" data-setting="detailTokens" class="text_pole" type="number" min="0" step="500"></div>
           <div class="wm-field"><label for="wm_reference_budget">Prior entry-fact tokens per request</label><input id="wm_reference_budget" data-setting="referenceTokens" class="text_pole" type="number" min="500" step="500"></div>
           <div class="wm-field"><label for="wm_position">WI insertion position</label><select id="wm_position" data-setting="position" class="text_pole"><option value="4">In chat at depth</option><option value="0">Before Main Prompt / Story String</option><option value="1">After Main Prompt / Story String</option><option value="2">Before Author’s Note</option><option value="3">After Author’s Note</option></select></div>

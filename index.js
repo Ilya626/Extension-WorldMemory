@@ -40,14 +40,21 @@ let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nat
 let lastNativeWIScan = null;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
+function wiCoverage(memory) {
+    const packets = Object.values(memory?.archive?.records || {}).filter(packet => !packet.deleted);
+    const prepared = packets.filter(packet => Array.isArray(packet.memoryMetadata?.wi?.updates));
+    const empty = prepared.filter(packet => !packet.memoryMetadata.wi.updates.length).length;
+    const applied = packets.filter(packet => memory?.wiPackets?.[packet.id]?.status === 'applied').length;
+    return `WI по сохранённым L0: подготовлено ${prepared.length} / ${packets.length}, из них пустых ${empty}; применено ${applied}. Без результата WI: ${packets.length - prepared.length}.`;
+}
 const status = text => {
     const node = document.getElementById('wm_status');
-    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status !== 'applied');
+    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'error' || item.status === 'stale');
     const destination = memory?.book ? `Книга результата: ${memory.book}.` : 'Книга результата ещё не создана.';
     const receipt = pending.length ? `WI не применён: ${pending[0].message}`
         : memory?.lastWIWrite ? `Подтверждено на диске · записей WorldMemory: ${memory.lastWIWrite.records}.` : '';
     if (node) node.textContent = pending.length ? `${text}\n${receipt}` : text;
-    for (const feedback of document.querySelectorAll('.wm-wi-feedback')) feedback.textContent = `${text}\n${destination} ${receipt}`;
+    for (const feedback of document.querySelectorAll('.wm-wi-feedback')) feedback.textContent = `${text}\n${destination} ${receipt}\n${wiCoverage(memory)}`;
     renderBusy();
 };
 const settings = () => {
@@ -347,9 +354,10 @@ async function injectBook(payload) {
 async function model(systemPrompt, prompt, metadata) {
     unchanged(metadata);
     let timeout;
+    const idleSeconds = settings().wiStreaming ? 120 : 300;
     const activity = () => {
         clearTimeout(timeout);
-        timeout = setTimeout(() => controller?.abort(new Error('No response data for 120 seconds. Saved WI was kept.')), 120000);
+        timeout = setTimeout(() => controller?.abort(new Error(`No response data for ${idleSeconds} seconds. Saved WI was kept.`)), idleSeconds * 1000);
     };
     activity();
     try {
@@ -694,8 +702,9 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const waiting = ownedEntries(book, state().owner).filter(entry => entryMeta(entry).main && !entry.content?.trim()).length;
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
         const wiPending = Object.values(state().wiPackets).filter(item => item.status !== 'applied');
+        const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
-            : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${wiPending.length ? `Не применено WI: ${wiPending[0].message}` : 'Запись подтверждена на диске.'}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
+            : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. Запись подтверждена на диске.${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
     } catch (error) {
         if (cleanupOnly) throw error;
         console.error('[World Memory]', error);
@@ -715,7 +724,7 @@ async function backfillSpine() {
         status(error.message); if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory');
     } finally { history.changed(); renderBusy(); await render(); await renderArchive(); }
 }
-async function backfillMetadata() {
+async function backfillMetadata({ force = false } = {}) {
     if (busy) return;
     if (!bridge()?.backfillMemoryMetadata) { status('Archive runtime is not ready. Reload ST.'); return; }
     if (!ctx().chatId) { status('Open a character chat first.'); return; }
@@ -725,12 +734,14 @@ async function backfillMetadata() {
         // The archive writer owns its reservation/controller. WI references can
         // still be prepared locally; they must not see a self-imposed WI busy.
         if (settings().auto && chatWorldInfo(ctx())) await getBook(true);
-        const result = await bridge().backfillMemoryMetadata({ responseTokens: settings().responseTokens,
-            onProgress: progress => status(`Building L′ / search excerpts ${progress.saved + 1} / ${progress.total} · ${progress.sourceStatus === 'summary-only' ? 'summary only; originals unavailable or changed' : 'complete original packet'}`) });
+        const result = await bridge().backfillMemoryMetadata({ force, responseTokens: settings().responseTokens,
+            onProgress: progress => status(`Подготовка поиска / WI: блок ${progress.saved + 1} / ${progress.total} · ${progress.sourceStatus === 'summary-only' ? 'без исходников; новые WI не создаются' : 'полные исходные сообщения'}`) });
         status(result.total ? `Saved metadata for ${result.saved} L0 packet(s). ${result.summaryOnly} summary-only. ${result.warnings} with ignored excerpts. L0 text was kept.`
             : 'All saved L0 packets already have current L′ / search metadata.');
     } catch (error) {
-        status(error.message); if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory');
+        const progress = error.metadataProgress;
+        status(`${progress ? `Обработано ${progress.saved} / ${progress.total} блоков. Остановка на ${progress.packetId}; оставшиеся не обработаны. ` : ''}${error.message}`);
+        if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory');
     } finally {
         history.changed();
         renderBusy(); await render(); await renderArchive();
@@ -746,7 +757,7 @@ function schedule() {
 }
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
-    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
+    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
@@ -968,10 +979,10 @@ async function render() {
             ? `Результат будет записан в ${linkedWI}. Ручные записи не перезаписываются; карточка и глобальные WI не меняются.`
             : `Выбранная книга ${linkedWI} отсутствует. Выберите другую; автоматической подмены нет.`
         : 'WI этого чата не выбран. История сохраняется; подготовка WI ждёт выбора. Книга из карточки или активного списка не подставляется.';
-    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status !== 'applied');
-    document.getElementById('wm_saved_wi_status').textContent = wiPending.length
-        ? `${wiPending.length} saved WI result(s) need attention. ${wiPending[0].message} L0 is retained; Retry saved WI uses no model request.`
-        : `Saved WI: ${wiResults.length} applied result(s). WI references are prepared after saving each new L0.`;
+    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status === 'error' || item.status === 'stale');
+    document.getElementById('wm_saved_wi_status').textContent = `${wiCoverage(memory)} ${wiPending.length
+        ? `${wiPending.length} результат(ов) требуют внимания: ${wiPending[0].message}`
+        : 'Новые сообщения попадают сюда после сохранения L0; несжатый хвост ещё не обработан.'}`;
     $('#wm_main_names').val(memory?.mainNames.join('\n') || '');
     const characters = document.getElementById('wm_characters'), records = document.getElementById('wm_records');
     characters.replaceChildren(); records.replaceChildren();
@@ -1541,7 +1552,11 @@ async function init() {
         status('Stage 1 now uses the displayed built-in WorldMemory prompts. Stage 2 was not changed.');
     });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
-    $('#wm_backfill_metadata').on('click', () => { void backfillMetadata(); });
+    $('#wm_backfill_metadata').on('click', () => {
+        const repeat = document.getElementById('wm_repeat_metadata'), force = repeat.checked;
+        repeat.checked = false;
+        void backfillMetadata({ force });
+    });
     $('#wm_backfill_spine').on('click', () => { void backfillSpine(); });
     $('#wm_stop').on('click', () => { clearTimeout(timer); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy(); });
     $('#wm_summarize').on('click', () => { void archiveRuntime.summarizeNow().then(renderArchive).catch(error => status(error.message)).finally(renderBusy); });

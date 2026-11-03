@@ -118,9 +118,10 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         requestTrace = [...requestTrace.filter(item => item.metadata === owner.metadata), { metadata: owner.metadata, trace }].slice(-2);
         notifyRequest();
         let idle;
+        const idleSeconds = selected.summarizerStreaming ? 120 : 300;
         const activity = () => {
             clearTimeout(idle);
-            idle = setTimeout(() => owner.controller.abort(new Error('No response data for 120 seconds. Saved memory was kept.')), 120000);
+            idle = setTimeout(() => owner.controller.abort(new Error(`No response data for ${idleSeconds} seconds. Saved memory was kept.`)), idleSeconds * 1000);
             options.onActivity?.();
         };
         activity();
@@ -380,9 +381,13 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 const packet = await summarizeBatch(owner, options.force !== false);
                 if (!packet) break;
                 result.saved++; result.packetIds.push(packet.id);
-                if (packet.annotationStatus !== 'complete') { result.pending++; break; }
+                if (packet.annotationStatus !== 'complete') result.pending++;
+                // A rejected optional excerpt must not strand the remaining chat.
+                // Hard request/parse failures remain pending and stop this run.
+                if (packet.annotationStatus === 'pending') break;
             } while (options.all && !owner.controller.signal.aborted);
             if (!result.saved) status('No source packet outside the retained raw tail and blind zone is ready.');
+            else if (result.pending) status(`Saved ${result.saved} L0 packet(s); ${result.pending} need metadata review. Valid WI and L0 were kept. Retry stage 2 only.`);
             return result;
         }, options);
     }
@@ -436,7 +441,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 const linked = !packet.stale && packet.sourceStatus === 'linked';
                 const sources = linked ? originals(owner, record.sourceMessageIds) : [];
                 options.onProgress?.({ ...result, packetId: packet.id, sourceStatus: linked ? 'linked' : 'summary-only' });
-                const detail = await annotate(owner, record, sources, { responseTokens: options.responseTokens, onActivity: options.onActivity });
+                let detail;
+                try { detail = await annotate(owner, record, sources, { responseTokens: options.responseTokens, onActivity: options.onActivity }); }
+                catch (error) { error.metadataProgress = { ...result, packetId: packet.id }; throw error; }
                 result.saved++; if (!linked) result.summaryOnly++;
                 if (detail.warning) result.warnings++;
             }
