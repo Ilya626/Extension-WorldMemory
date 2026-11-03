@@ -6,7 +6,7 @@ import { syncContextOverrides, setContextForMessages, applySummaryContextPolicy 
 import { sendSummarizerRequest } from './vendor/summaryception/connectionutil.js';
 import { stripReasoningBlocks, requireModelOutput, getModelOutputIssue } from './vendor/summaryception/output-validation.js';
 import { metadataSources, readMemoryMetadata, memoryTextRevision, MEMORY_METADATA_INSTRUCTION } from './vendor/summaryception/memory-metadata.js';
-import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget, characterWorldInfo } from './vendor/summaryception/world-info-context.js';
+import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget, chatWorldInfo } from './vendor/summaryception/world-info-context.js';
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
@@ -193,7 +193,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     }
     function metadataSystem(wiSystemPrompt, knowledgeActive = false) {
         return [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wiSystemPrompt,
-            !wiSystemPrompt ? 'No card-scoped WI context was supplied. Omit WI updates; prepare only the other requested metadata.' : null,
+            !wiSystemPrompt ? 'No chat-scoped WI context was supplied. Omit WI updates; prepare only the other requested metadata.' : null,
             knowledgeActive ? `${AWARENESS_INSTRUCTION.replace('Optionally return', 'Return')}\nFor this enabled information-event preparation, include the awareness array in the same metadata object. Return awareness: [] if no supported events qualify; do not omit the field.` : null,
             'This is stage 2. The saved L0 prose is immutable and is a draft navigation aid, not independent proof. Return ONLY one <memory_metadata> JSON block, with no L0 prose. Search excerpts and this packet\'s WI contributions must be supported by the supplied new_sources, not by the saved L0 or retained prior references. With no original sources use saved_summary only for Lprime, return facts: [], and omit WI claims.'].filter(Boolean).join('\n\n');
     }
@@ -230,7 +230,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         if (!template.includes('{{context_str}}')) prompt += `\n\n<previous_l0>\n${previous?.text || '(first L0; none)'}\n</previous_l0>`;
         if (!template.includes('{{story_txt}}')) prompt += `\n\n<new_sources>\n${story}\n</new_sources>`;
         if (existing !== null) prompt += `\n\n<existing_summary>\n${existing}\n</existing_summary>\nRefine the complete existing_summary against exactly new_sources. Retain all its supported details, recover omissions and correct unsupported claims. This is a complete replacement, not a delta; do not drop facts as already known from previous_l0.`;
-        if (s.summarizerWorldInfo && characterWorldInfo(ctx())) {
+        if (s.summarizerWorldInfo && chatWorldInfo(ctx())) {
             status('Scanning native World Info for the source packet and previous L0.');
             const info = await collectSummaryWorldInfo(story, [previous?.text, existing].filter(Boolean).join('\n\n'), {
                 maxTokens: summaryWorldInfoBudget(s), sourceMessages: sources.map(source => `${source.name}: ${source.text}`),
@@ -238,7 +238,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 onComplete: ({ partial }) => { if (partial) warn('Native WI partially included; whole entries that did not fit were omitted.'); } });
             guard(owner); prompt = attachSummaryWorldInfo(prompt, info);
         } else if (s.summarizerWorldInfo) {
-            warn('Link a World Info book to this character in WorldMemory → Card WI to use author lore. L0 is saved without WI; active/global books are not substituted.');
+            warn('Choose WI for this chat in WorldMemory → WI этого чата to use author lore. L0 is saved without WI; card/global books are not substituted.');
         }
         status('Stage 1: waiting for L0 and its story skeleton. Stop cancels the request.');
         const response = await transport(owner, system, prompt, { stage: existing === null ? 'l0' : 'refine-l0' });
@@ -314,7 +314,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 sourceFingerprints: sources.length ? fingerprints(owner, sources) : savedFingerprint,
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
                 ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
-            if (!sources.length || !wi?.context || (wi.stamp?.authorBook !== undefined && wi.stamp.authorBook !== characterWorldInfo(ctx()))) {
+            if (!sources.length || !wi?.context || (wi.stamp?.authorBook !== undefined && wi.stamp.authorBook !== chatWorldInfo(ctx()))) {
                 delete metadata.wi;
                 if (wi) metadata.wiStatus = 'blocked';
             }

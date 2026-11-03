@@ -4,18 +4,18 @@ let scanning = false;
 let sourceScope = null;
 let sourceSignal;
 let sourceBook = null;
+let sourceEntries = [];
 let trackingSource;
 const forcedEntries = new Map();
 
-// Only the card's explicit primary book is an author source for maintenance.
-// Global, chat, persona and extra character books remain ordinary RP settings.
-export function characterWorldInfo(context = SillyTavern.getContext()) {
-    const world = context.characters?.[context.characterId]?.data?.extensions?.world;
+// Explicit per-chat source only. Never infer it from the card or active books.
+export function chatWorldInfo(context = SillyTavern.getContext()) {
+    const world = context.chatMetadata?.worldMemory?.wiSourceBook;
     return typeof world === 'string' ? world.trim() : '';
 }
-export function requireCharacterWorldInfo(context = SillyTavern.getContext()) {
-    const world = characterWorldInfo(context);
-    if (!world) throw new Error('Link a World Info book to this character in WorldMemory → Card WI before updating WI. Active/global books are not a substitute. Saved history is kept.');
+export function requireChatWorldInfo(context = SillyTavern.getContext()) {
+    const world = chatWorldInfo(context);
+    if (!world) throw new Error('Choose WI for this chat in WorldMemory → WI этого чата before updating WI. The card and active/global books are not used as a fallback. Saved history is kept.');
     return world;
 }
 
@@ -32,8 +32,10 @@ export function installWorldInfoTracking(context = SillyTavern.getContext()) {
         // Filter before native matching, recursion, group scoring and budgeting.
         for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
             const entries = payload[key];
-            if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry => entry.world === sourceBook));
+            if (Array.isArray(entries)) entries.splice(0, entries.length);
         }
+        // The chosen book need not be active or attached to the character.
+        payload.characterLore.push(...structuredClone(sourceEntries));
     });
     eventSource.on(event_types.WORLDINFO_FORCE_ACTIVATE, entries => {
         for (const entry of entries) {
@@ -92,13 +94,14 @@ async function worldInfoEntries(result, excludedBooks = new Set(), allowedBook =
 
 export async function collectSummaryWorldInfo(story, prior, options = {}) {
     const context = SillyTavern.getContext();
-    const book = requireCharacterWorldInfo(context);
+    const book = requireChatWorldInfo(context);
     const avatar = context.characters?.[context.characterId]?.avatar;
     installWorldInfoTracking(context);
     // checkWorldInfo avoids WORLD_INFO_ACTIVATED (and chat-generation scripts).
     const { checkWorldInfo, loadWorldInfo } = await import('/scripts/world-info.js');
     if (typeof checkWorldInfo !== 'function') throw new Error('This ST version does not expose the native World Info scanner');
-    if (!await loadWorldInfo(book)) throw new Error(`Card WI book is missing: ${book}. Link an available book in WorldMemory → Card WI; active/global books were not used.`);
+    const bookData = await loadWorldInfo(book);
+    if (!bookData) throw new Error(`Chat WI book is missing: ${book}. Choose an available book in WorldMemory → WI этого чата; no other book was substituted.`);
     if (SillyTavern.getContext().chat !== context.chat) throw new Error('Chat changed before World Info scan');
     if (scanning) throw new Error('A summary World Info scan is already running');
 
@@ -123,8 +126,8 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
         options.signal?.throwIfAborted();
         if (SillyTavern.getContext().chatMetadata !== metadata) throw new Error('Chat changed during World Info scan');
         const current = SillyTavern.getContext();
-        if (characterWorldInfo(current) !== book || current.characters?.[current.characterId]?.avatar !== avatar)
-            throw new Error('The card WI binding changed during the scan. Retry with the current linked book.');
+        if (chatWorldInfo(current) !== book || current.characters?.[current.characterId]?.avatar !== avatar)
+            throw new Error('The chat WI selection changed during the scan. Retry with the current linked book.');
     };
     const scanFields = {
         trigger: 'normal', personaDescription: fields.persona || '', characterDescription: fields.description || '',
@@ -133,6 +136,7 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
     };
     scanning = true;
     sourceBook = book;
+    sourceEntries = Object.entries(bookData.entries || {}).map(([uid, entry]) => ({ ...entry, uid: entry.uid ?? uid, world: book }));
     sourceSignal = options.signal;
     sourceScope = Object.freeze([]);
     try {
@@ -170,6 +174,7 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
     } finally {
         sourceScope = null;
         sourceBook = null;
+        sourceEntries = [];
         sourceSignal = undefined;
         if (hadTimers) metadata.timedWorldInfo = originalTimers;
         else delete metadata.timedWorldInfo;
