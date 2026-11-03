@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.12 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.13 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 For Chat Completion, history first uses its configured allowance. After ST assembles the full request, a final local stage measures the remaining space and adds more already ranked history details towards the desired context. It preserves the complete outline, previous details, raw tail, WI and manual settings. Whole passages must fit the remaining space; an already overflowing request is kept whole. Protected exchanges remain outside the desired-context budget. This stage adds no model or embedding calls and does not yet apply to Text Completion. The UI shows the final request separately from the planning allocations.
 
@@ -178,6 +178,8 @@ A new packet uses **two sequential background generation requests** through the 
 These requests are separate from your ordinary chat reply. Embedding requests also send indexed text and search queries to the configured embedding service. Changed sources are indexed as needed; unchanged vectors are reused. Background generation can receive native WI as read-only context, controlled by **Advanced summarizer context**.
 
 **Per-chat WI isolation:** choose **WI этого чата** at the top of WorldMemory settings. Selection is saved immediately in this chat's metadata; different chats can choose different books, including a book that is not globally active or linked to the card. No book is inferred from the card, current editor or active list. Background author-lore scans use only the explicitly chosen book, filtering before native matching, recursion, groups and budgets. If no book is selected, L0 and search metadata can still be saved, but WI updates wait for your choice. Generated references continue to use their separate chat-scoped memory book; the source book is read-only. The card binding, ordinary RP activation and active book selections remain unchanged.
+
+**WI streaming:** the **Streaming** checkbox beside **Update legacy WI** controls legacy WI requests and stage 2 (search metadata / WI). Unchecked sends a non-streaming request; checked requests streaming. It is off by default and independent of **Stream L0 / L″ responses** in the summarizer connection settings.
 
 The main-panel **Compression trigger** decides when eligible older raw text is ready to compress. **Maximum source tokens per call**, under **Summarizer connection**, separately limits how many source tokens one background request processes; it is not the compression threshold. The permanent raw tail and protected exchanges remain. **Pause automatic summarization** is under **Advanced history and packet settings**. Original messages remain in the chat; hiding controls decide which summarized messages are sent to the model. Reapplying automatic hiding is off by default to preserve manual visibility choices.
 

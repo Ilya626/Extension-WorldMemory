@@ -107,8 +107,10 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     async function transport(owner, systemPrompt, prompt, options = {}) {
         guard(owner);
         const selected = { ...config() };
+        const stage = options.stage || 'legacy-wi';
+        if (stage === 'metadata' || stage === 'legacy-wi') selected.summarizerStreaming = selected.wiStreaming === true;
         if (Number(options.responseTokens) > 0) for (const key of ['summarizerResponseLength', 'openaiMaxTokens', 'ollamaMaxTokens']) selected[key] = Number(options.responseTokens);
-        const trace = { id: crypto.randomUUID(), stage: options.stage || 'legacy-wi', startedAt: Date.now(),
+        const trace = { id: crypto.randomUUID(), stage, streaming: Boolean(selected.summarizerStreaming), startedAt: Date.now(),
             status: 'sending', systemPrompt, userPrompt: prompt, connection: selected.connectionSource || 'default',
             model: selected.connectionSource === 'openai' ? selected.openaiModel : selected.connectionSource === 'ollama' ? selected.ollamaModel : null,
             responseTokens: selected.summarizerResponseLength || (selected.connectionSource === 'openai' ? selected.openaiMaxTokens

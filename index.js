@@ -26,7 +26,7 @@ const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awaren
     contextReserveTokens: 4000, wiActivationTokens: 4000, wiActivationUnlimited: false,
     batchContextTokens: 24000, blindZoneExchanges: 1,
     ghostUserMessages: true, ghostAssistantMessages: true, reapplyGhostingOnSummary: false, pauseSummarization: false,
-    connectionSource: 'default', connectionProfileId: '', summarizerStreaming: false, summarizerResponseLength: 0,
+    connectionSource: 'default', connectionProfileId: '', summarizerStreaming: false, wiStreaming: false, summarizerResponseLength: 0,
     openaiUrl: '', openaiKey: '', openaiModel: '', openaiMaxTokens: 0, ollamaUrl: 'http://localhost:11434', ollamaModel: '', ollamaMaxTokens: 0,
     summaryLanguage: 'en', summaryCustomLanguage: '', summarizerWorldInfo: true, summarizerWorldInfoPercent: 20,
     injectionPosition: 0, injectionDepth: 1, injectionRole: 0, injectionScan: false, injectionTemplate: '[Earlier history]\n{{summary}}' };

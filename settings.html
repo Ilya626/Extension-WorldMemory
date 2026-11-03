@@ -55,7 +55,7 @@
         <small class="wm-muted">Maximum for one background source packet, separate from trigger T. A single oversized exchange is kept whole with a warning. Previous L0, WI and instructions add request overhead.</small>
         <details class="wm-advanced"><summary>Advanced summary settings</summary>
         <div class="wm-field"><label for="wm_summary_response_tokens">Response token override (0 = inherit connection)</label><input id="wm_summary_response_tokens" data-setting="summarizerResponseLength" class="text_pole" type="number" min="0" step="512"></div>
-        <label class="checkbox_label"><input id="wm_stream" data-setting="summarizerStreaming" type="checkbox"><span>Stream summarizer responses</span></label>
+        <label class="checkbox_label"><input id="wm_stream" data-setting="summarizerStreaming" type="checkbox"><span>Stream L0 / L″ responses</span></label>
         <div class="wm-field"><label for="wm_summary_language">L0 language</label><select id="wm_summary_language" data-setting="summaryLanguage" class="text_pole"><option value="auto">Follow source language</option><option value="en">English</option><option value="ru">Russian</option><option value="custom">Custom language</option></select></div>
         <div class="wm-field wm-custom-language"><label for="wm_summary_custom_language">Custom language</label><input id="wm_summary_custom_language" data-setting="summaryCustomLanguage" class="text_pole" type="text" placeholder="Language name"></div>
         </details>
@@ -166,7 +166,8 @@
         <div class="wm-actions"><button id="wm_retry_saved_wi" class="menu_button" type="button">Apply saved WI · 0 calls</button></div>
         <small class="wm-muted">Apply saved WI reuses saved results without a model request.</small>
         <details class="wm-advanced"><summary>Legacy WI maintenance</summary>
-          <button id="wm_update" class="menu_button" type="button">Update legacy WI</button>
+          <div class="wm-actions"><button id="wm_update" class="menu_button" type="button">Update legacy WI</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
+          <small class="wm-muted">Streaming для WI: выключено = обычный ответ целиком. Применяется к WI / поисковой разметке второго этапа и legacy WI. Первый этап L0 использует отдельную настройку выше.</small>
           <small class="wm-muted">Makes model requests for older records without regenerating L0.</small>
         </details>
         <div id="wm_saved_wi_status" class="wm-muted" role="status"></div>
