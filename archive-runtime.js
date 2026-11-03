@@ -127,7 +127,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         try {
             const result = await wait(sendRequest(selected, systemPrompt, prompt,
                 { signal: owner.controller.signal, returnDetails: true, onActivity: activity }), owner);
-            guard(owner); trace.status = 'complete'; return { ...result, text: clean(result.text || '') };
+            guard(owner); trace.responseText = result.text || ''; trace.status = 'complete'; return { ...result, text: clean(result.text || '') };
         } catch (error) { trace.status = 'error'; throw error; }
         finally { clearTimeout(idle); notifyRequest(); }
     }

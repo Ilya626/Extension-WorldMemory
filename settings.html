@@ -4,7 +4,7 @@
     <div class="inline-drawer-content">
       <p class="wm-muted">Keep the whole story in view: a complete outline with relevant original passages, plus recent chat.</p>
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
-      <div class="wm-field"><label for="wm_card_wi">WI этого чата · источник для фоновых запросов</label><select id="wm_card_wi" class="text_pole"></select></div>
+      <div class="wm-field"><label for="wm_card_wi">WI этого чата · источник лора (только чтение)</label><select id="wm_card_wi" class="text_pole"></select></div>
       <div id="wm_card_wi_status" class="wm-muted"></div>
       <section id="wm_card_resume_panel" hidden>
         <div id="wm_card_resume_status" class="wm-muted" role="status" aria-live="polite"></div>
@@ -73,6 +73,7 @@
             <p id="wm_prompt_request_info" class="wm-muted"></p>
             <label for="wm_prompt_sent_system">System</label><textarea id="wm_prompt_sent_system" class="text_pole" rows="10" readonly></textarea>
             <label for="wm_prompt_sent_user">User · исходники и контекст</label><textarea id="wm_prompt_sent_user" class="text_pole" rows="10" readonly></textarea>
+            <label for="wm_prompt_response">Ответ модели · до разбора WI</label><textarea id="wm_prompt_response" class="text_pole" rows="8" readonly></textarea>
             <small class="wm-muted">Хранятся только в памяти вкладки, без API-ключей и без записи в карточку/backup. Тексты могут содержать приватную игру; учитывайте это при скриншотах.</small>
           </details>
         </details>
@@ -121,7 +122,9 @@
         <div id="wm_archive" class="wm-archive"></div>
         <button id="wm_backfill_spine" class="menu_button" type="button">Prepare missing story skeleton</button>
         <small class="wm-muted">New L0 replies include their skeleton in the same response. Old records need one preparation request each; L0 text is kept. Until prepared, their full saved account is used and may exceed the soft target. Manual text remains authoritative.</small>
-        <button id="wm_backfill_metadata" class="menu_button" type="button">Prepare search / WI · stage 2 only</button>
+        <div class="wm-actions"><button id="wm_backfill_metadata" class="menu_button" type="button">Prepare search / WI · stage 2 only</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
+        <button id="wm_open_wi_result" class="menu_button" type="button">Открыть WI с результатом</button>
+        <div class="wm-wi-feedback wm-muted" role="status" aria-live="polite"></div>
         <small class="wm-muted">Resumes the second step for saved L0 records without rewriting them. Uses the summarizer connection above. Stop cancels processing.</small>
       </details>
 
@@ -166,7 +169,8 @@
         <div class="wm-actions"><button id="wm_retry_saved_wi" class="menu_button" type="button">Apply saved WI · 0 calls</button></div>
         <small class="wm-muted">Apply saved WI reuses saved results without a model request.</small>
         <details class="wm-advanced"><summary>Legacy WI maintenance</summary>
-          <div class="wm-actions"><button id="wm_update" class="menu_button" type="button">Update legacy WI</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
+          <button id="wm_update" class="menu_button" type="button">Update legacy WI</button>
+          <div class="wm-wi-feedback wm-muted" role="status" aria-live="polite"></div>
           <small class="wm-muted">Streaming для WI: выключено = обычный ответ целиком. Применяется к WI / поисковой разметке второго этапа и legacy WI. Первый этап L0 использует отдельную настройку выше.</small>
           <small class="wm-muted">Makes model requests for older records without regenerating L0.</small>
         </details>

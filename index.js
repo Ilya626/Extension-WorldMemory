@@ -40,7 +40,16 @@ let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nat
 let lastNativeWIScan = null;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
-const status = text => { const node = document.getElementById('wm_status'); if (node) node.textContent = text; renderBusy(); };
+const status = text => {
+    const node = document.getElementById('wm_status');
+    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status !== 'applied');
+    const destination = memory?.book ? `Книга результата: ${memory.book}.` : 'Книга результата ещё не создана.';
+    const receipt = pending.length ? `WI не применён: ${pending[0].message}`
+        : memory?.lastWIWrite ? `Подтверждено на диске · записей WorldMemory: ${memory.lastWIWrite.records}.` : '';
+    if (node) node.textContent = pending.length ? `${text}\n${receipt}` : text;
+    for (const feedback of document.querySelectorAll('.wm-wi-feedback')) feedback.textContent = `${text}\n${destination} ${receipt}`;
+    renderBusy();
+};
 const settings = () => {
     const value = ctx().extensionSettings[OWNER] ??= {};
     if (value.archiveConfigVersion && value.wiActivationUnlimited === undefined) {
@@ -210,8 +219,21 @@ async function saveBook(book, metadata, baseBook = null) {
         }
     }
     check();
+    const expected = signature(book);
     await nativeWI.saveWorldInfo(name, book, true);
     check();
+    // ST updates its cache before writing and does not reject HTTP error codes.
+    // Read the server, not that cache, before reporting a successful WI update.
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: context.getRequestHeaders(),
+        body: JSON.stringify({ name }) });
+    check();
+    const saved = response.ok ? await response.json() : null;
+    check();
+    if (!saved || signature(saved) !== expected) {
+        nativeWI.worldInfoCache?.delete(name);
+        throw new Error(`WI was not confirmed on disk: ${name}${response.ok ? '' : ` (HTTP ${response.status})`}. Saved L0 is kept; retry the saved WI result.`);
+    }
+    memory.lastWIWrite = { book: name, records: ownedEntries(saved, owner).length, at: Date.now() };
     await context.saveMetadata();
     check();
     return book;
@@ -619,7 +641,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
         const wiPending = Object.values(state().wiPackets).filter(item => item.status !== 'applied');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
-            : `Updated · ${ownedEntries(book, state().owner).length} records from ${Object.keys(state().packets).length} L0 packets. Saved WI applies without another model request.${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${wiPending.length ? ` ${wiPending.length} WI result(s) pending: ${wiPending[0].message} Retry saved WI makes no model request.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
+            : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${wiPending.length ? `Не применено WI: ${wiPending[0].message}` : 'Запись подтверждена на диске.'}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
     } catch (error) {
         if (cleanupOnly) throw error;
         console.error('[World Memory]', error);
@@ -863,6 +885,7 @@ function renderSummaryPrompts() {
         : 'Запросов в этой вкладке для открытого чата пока нет. Здесь появятся последние два; после перезагрузки история очищается. Без подключения к API можно смотреть шаблоны выше.';
     document.getElementById('wm_prompt_sent_system').value = request?.systemPrompt || '';
     document.getElementById('wm_prompt_sent_user').value = request?.userPrompt || '';
+    document.getElementById('wm_prompt_response').value = request?.responseText || '';
 }
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
@@ -1468,7 +1491,7 @@ async function init() {
                 : 'In-memory vectors cleared. Browser persistent storage is unavailable; saved memory and WI are unchanged.');
         } catch (error) { status(error.message); }
     });
-    $('#wm_open').on('click', () => { if (state()?.book) nativeWI.openWorldInfoEditor(state().book); else status('Update memory first to create the book.'); });
+    $('#wm_open, #wm_open_wi_result').on('click', () => { if (state()?.book) nativeWI.openWorldInfoEditor(state().book); else status('Update memory first to create the book.'); });
     $('#wm_export').on('click', async () => {
         try { if (!busy && !archiveRuntime.isBusy()) download('world-memory-backup.json', await exportBackup()); }
         catch (error) { status(error.message); toastr.warning(error.message, 'World Memory'); }
