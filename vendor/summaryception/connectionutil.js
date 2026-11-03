@@ -19,6 +19,26 @@ import { providerUsage } from './provider-usage.js';
 
 const MODULE_NAME = '[Summaryception][Connection]';
 
+function observeResponse(callback, response) {
+    try { callback?.(response); } catch (error) { console.warn(`${MODULE_NAME} Response capture failed: ${error.message}`); }
+}
+function responseText(data) {
+    const content = typeof data === 'string' ? data : data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text
+        ?? data?.message?.content ?? data?.content ?? data?.response ?? data?.candidates?.[0]?.content?.parts;
+    return typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text || '').join('')
+        : typeof data?.choices?.[0]?.message?.refusal === 'string' ? data.choices[0].message.refusal : '';
+}
+async function readResponseJson(response, onResponse) {
+    const raw = await response.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (error) { observeResponse(onResponse, { rawResponseBody: raw, decodeError: error.message, httpStatus: response.status }); throw error; }
+    const text = responseText(data);
+    observeResponse(onResponse, { responseText: text, ...(!text || data?.error ? { rawResponseBody: raw } : {}),
+        httpStatus: response.status, returnedModel: data?.model, finishReason: data?.choices?.[0]?.finish_reason });
+    return data;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  LLM_DEFAULTS — Centralised connection-side constants.
 //  Tweak sampling parameters and limits here instead of inside functions.
@@ -86,7 +106,7 @@ function getProxyHeaders() {
  * @returns {Promise<string>} - The generated response text
  * @throws {ConnectionError|Error} - If the request fails
  */
-export async function sendSummarizerRequest(settings, systemPrompt, userPrompt, { signal, returnDetails = false, onActivity } = {}) {
+export async function sendSummarizerRequest(settings, systemPrompt, userPrompt, { signal, returnDetails = false, onActivity, onResponse } = {}) {
     const responseOverride = Number(settings.summarizerResponseLength);
     if (Number.isFinite(responseOverride) && responseOverride > 0) settings = {
         ...settings, openaiMaxTokens: Math.floor(responseOverride), ollamaMaxTokens: Math.floor(responseOverride),
@@ -96,17 +116,17 @@ export async function sendSummarizerRequest(settings, systemPrompt, userPrompt, 
     let result;
     switch (source) {
         case 'profile':
-            result = await sendViaProfile(settings.connectionProfileId, systemPrompt, userPrompt, settings.summarizerResponseLength, signal, streaming, onActivity);
+            result = await sendViaProfile(settings.connectionProfileId, systemPrompt, userPrompt, settings.summarizerResponseLength, signal, streaming, onActivity, onResponse);
             break;
         case 'ollama':
-            result = await sendViaOllama(settings.ollamaUrl, settings.ollamaModel, systemPrompt, userPrompt, signal, streaming, onActivity, settings.ollamaMaxTokens);
+            result = await sendViaOllama(settings.ollamaUrl, settings.ollamaModel, systemPrompt, userPrompt, signal, streaming, onActivity, settings.ollamaMaxTokens, onResponse);
             break;
         case 'openai':
-            result = await sendViaOpenAI(settings.openaiUrl, settings.openaiKey, settings.openaiModel, systemPrompt, userPrompt, settings.openaiMaxTokens, signal, onActivity, streaming);
+            result = await sendViaOpenAI(settings.openaiUrl, settings.openaiKey, settings.openaiModel, systemPrompt, userPrompt, settings.openaiMaxTokens, signal, onActivity, streaming, onResponse);
             break;
         case 'default':
         default:
-            result = await sendViaDefault(systemPrompt, userPrompt, settings.summarizerResponseLength, signal, streaming, onActivity);
+            result = await sendViaDefault(systemPrompt, userPrompt, settings.summarizerResponseLength, signal, streaming, onActivity, onResponse);
     }
     const details = typeof result === 'string' ? { text: result } : result;
     requireModelOutput(details.text);
@@ -118,8 +138,8 @@ export async function sendSummarizerRequest(settings, systemPrompt, userPrompt, 
 /**
  * Uses ST's built-in generateRaw(), which routes through the active connection.
  */
-async function sendViaDefault(systemPrompt, userPrompt, responseLength, signal, streaming, onActivity) {
-    if (streaming) return sendViaDefaultStream(systemPrompt, userPrompt, responseLength, signal, onActivity);
+async function sendViaDefault(systemPrompt, userPrompt, responseLength, signal, streaming, onActivity, onResponse) {
+    if (streaming) return sendViaDefaultStream(systemPrompt, userPrompt, responseLength, signal, onActivity, onResponse);
     const { generateRaw, generateRawData, extractMessageFromData, eventSource, event_types } = SillyTavern.getContext();
     signal?.throwIfAborted();
     const onAbort = () => {
@@ -130,6 +150,7 @@ async function sendViaDefault(systemPrompt, userPrompt, responseLength, signal, 
         if (typeof generateRawData === 'function' && typeof extractMessageFromData === 'function') {
             const data = await generateRawData({ systemPrompt, prompt: userPrompt,
                 ...(responseLength > 0 ? { responseLength: Number(responseLength) } : {}) });
+            observeResponse(onResponse, { responseText: extractMessageFromData(data) });
             const { cleanUpMessage } = await import('/script.js');
             const text = cleanUpMessage({ getMessage: extractMessageFromData(data), isImpersonate: false, isContinue: false,
                 displayIncompleteSentences: true, includeUserPromptBias: false, trimNames: true, trimWrongNames: true });
@@ -177,6 +198,7 @@ async function sendViaDefault(systemPrompt, userPrompt, responseLength, signal, 
             result = await generateRaw(userPrompt, systemPrompt);
         }
 
+        observeResponse(onResponse, { responseText: typeof result === 'string' ? result : responseText(result) });
         if (typeof result !== 'string') {
             throw new InvalidModelOutputError('generateRaw returned an empty or invalid response');
         }
@@ -187,23 +209,24 @@ async function sendViaDefault(systemPrompt, userPrompt, responseLength, signal, 
     }
 }
 
-async function collectNativeStream(response, signal, onActivity) {
-    if (typeof response !== 'function') return response;
+async function collectNativeStream(response, signal, onActivity, onResponse) {
+    if (typeof response !== 'function') { observeResponse(onResponse, { responseText: responseText(response) }); return response; }
     onActivity?.();
     let text = '';
     let usage = {};
     for await (const chunk of response()) {
         signal?.throwIfAborted();
         onActivity?.();
-        if (hasProviderRefusal(chunk)) throw new InvalidModelOutputError('the provider reported a refusal or content filter');
         if (typeof chunk.text === 'string') text = chunk.text;
+        observeResponse(onResponse, { responseText: text, partial: true });
+        if (hasProviderRefusal(chunk)) throw new InvalidModelOutputError('the provider reported a refusal or content filter');
         usage = { ...usage, ...providerUsage(chunk) };
     }
     signal?.throwIfAborted();
     return { content: requireModelOutput(text), ...usage };
 }
 
-async function sendViaDefaultStream(systemPrompt, userPrompt, responseLength, signal, onActivity) {
+async function sendViaDefaultStream(systemPrompt, userPrompt, responseLength, signal, onActivity, onResponse) {
     const ctx = SillyTavern.getContext();
     const native = await import('/script.js');
     const prompt = native.createRawPrompt(userPrompt, ctx.mainApi, false, false, systemPrompt, '');
@@ -259,9 +282,9 @@ async function sendViaDefaultStream(systemPrompt, userPrompt, responseLength, si
         };
     } else {
         // Horde's queued backend has no streaming protocol.
-        return sendViaDefault(systemPrompt, userPrompt, responseLength, signal, false, onActivity);
+        return sendViaDefault(systemPrompt, userPrompt, responseLength, signal, false, onActivity, onResponse);
     }
-    const result = await collectNativeStream(response, signal, onActivity);
+    const result = await collectNativeStream(response, signal, onActivity, onResponse);
     const text = native.cleanUpMessage({ getMessage: result.content, isImpersonate: false, isContinue: false,
         displayIncompleteSentences: true, includeUserPromptBias: false, trimNames: true, trimWrongNames: true });
     return { ...result, text: requireModelOutput(text) };
@@ -291,7 +314,7 @@ async function cleanProfileText(text, profile) {
 // ─── Mode 2: Connection Profile ──────────────────────────────────────
 
 /** Call ST's profile service without changing the active connection or its preset. */
-async function sendViaProfile(profileId, systemPrompt, userPrompt, responseLength, signal, streaming, onActivity) {
+async function sendViaProfile(profileId, systemPrompt, userPrompt, responseLength, signal, streaming, onActivity, onResponse) {
     if (!profileId) throw new ConnectionError('Select a Connection Profile in WorldMemory settings.');
     const ctx = SillyTavern.getContext();
     const service = ctx.ConnectionManagerRequestService;
@@ -313,18 +336,20 @@ async function sendViaProfile(profileId, systemPrompt, userPrompt, responseLengt
             responseLength > 0 ? Number(responseLength) : undefined, { signal, extractData: false, stream: streaming });
         const api = profile && service.validateProfile?.(profile)?.selected;
         if (typeof raw === 'function') {
-            const result = await collectNativeStream(raw, signal, onActivity);
+            const result = await collectNativeStream(raw, signal, onActivity, onResponse);
             const text = api === 'textgenerationwebui' ? await cleanProfileText(result.content, profile) : result.content;
             return { ...result, text: requireModelOutput(text) };
         }
-        if (hasProviderRefusal(raw)) throw new InvalidModelOutputError('the provider reported a refusal or content filter');
         const data = raw?.data ?? raw;
+        observeResponse(onResponse, { responseText: responseText(data) });
+        if (hasProviderRefusal(raw)) throw new InvalidModelOutputError('the provider reported a refusal or content filter');
         let result = typeof data === 'string' ? data
             : (Array.isArray(data?.content) ? data.content.filter(part => part.type === 'text').map(part => part.text).join('') : data?.content)
                 ?? data?.message?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text
                 ?? data?.response ?? data?.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('');
         if (api && typeof ctx.extractMessageFromData === 'function') result = ctx.extractMessageFromData(data, api);
         if (Array.isArray(result)) result = result.filter(part => !part.type || part.type === 'text').map(part => part.text || '').join('');
+        observeResponse(onResponse, { responseText: typeof result === 'string' ? result : '' });
         if (typeof result !== 'string') throw new InvalidModelOutputError('Connection Profile returned no summary text');
         if (api === 'textgenerationwebui') result = await cleanProfileText(result, profile);
         return { text: requireModelOutput(result, raw), ...providerUsage(raw), ...providerUsage(data) };
@@ -352,7 +377,7 @@ async function sendViaProfile(profileId, systemPrompt, userPrompt, responseLengt
  * Send a request to a local Ollama instance using /api/chat.
  * Routes through ST's CORS proxy to avoid browser CORS restrictions.
  */
-async function sendViaOllama(url, model, systemPrompt, userPrompt, signal, streaming, onActivity, responseLength) {
+async function sendViaOllama(url, model, systemPrompt, userPrompt, signal, streaming, onActivity, responseLength, onResponse) {
     signal?.throwIfAborted();
     if (!url) {
         throw new ConnectionError(
@@ -424,6 +449,7 @@ async function sendViaOllama(url, model, systemPrompt, userPrompt, signal, strea
 
     if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
+        observeResponse(onResponse, { rawResponseBody: errorText, httpStatus: response.status });
         throw new ConnectionError(
             `Ollama request failed (${response.status}): ${errorText}`,
                                   { retryable: response.status >= 500, status: response.status }
@@ -438,9 +464,10 @@ async function sendViaOllama(url, model, systemPrompt, userPrompt, signal, strea
         const readLine = line => {
             if (!line.trim()) return;
             const data = JSON.parse(line);
+            text += data.message?.content || '';
+            observeResponse(onResponse, { responseText: text, partial: !data.done });
             if (data.error) throw new ConnectionError(String(data.error));
             if (hasProviderRefusal(data)) throw new InvalidModelOutputError('the provider reported a refusal or content filter');
-            text += data.message?.content || '';
             last = data;
         };
         try {
@@ -463,7 +490,7 @@ async function sendViaOllama(url, model, systemPrompt, userPrompt, signal, strea
         if (!last.done) throw new ConnectionError('Ollama stream ended before generation completed. Summary not saved.');
         return { text: requireModelOutput(text, last), ...providerUsage(last) };
     }
-    const data = await response.json();
+    const data = await readResponseJson(response, onResponse);
 
     return { text: requireModelOutput(data?.message?.content ?? '', data), ...providerUsage(data) };
 }
@@ -525,7 +552,7 @@ export async function fetchOllamaModels(url) {
  * Uses ST's native Custom OpenAI backend for every endpoint. Providers do not
  * need browser CORS support and credentials stay off cross-origin requests.
  */
-async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTokens, signal, onActivity, streaming = false) {
+async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTokens, signal, onActivity, streaming = false, onResponse) {
     signal?.throwIfAborted();
     if (!url) {
         throw new ConnectionError(
@@ -595,6 +622,7 @@ async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTo
 
     if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
+        observeResponse(onResponse, { rawResponseBody: errorText, httpStatus: response.status });
         if (response.status === 401) {
             throw new ConnectionError(
                 'OpenAI Compatible endpoint returned 401 Unauthorized. Check your API key.',
@@ -614,7 +642,7 @@ async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTo
     }
 
     if (!streaming || response.headers.get('content-type')?.includes('application/json')) {
-        const data = await response.json();
+        const data = await readResponseJson(response, onResponse);
         if (data.error) throw new ConnectionError(data.error.message || String(data.error));
         const text = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
         return { text: requireModelOutput(text, data), ...providerUsage(data),
@@ -640,7 +668,8 @@ async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTo
         const data = trimmed.slice(5).trim();
         if (data === '[DONE]') { completed = true; doneEvent = true; return; }
         let parsed;
-        try { parsed = JSON.parse(data); } catch { return; }
+        try { parsed = JSON.parse(data); }
+        catch (error) { observeResponse(onResponse, { rawResponseBody: data, decodeError: error.message, partial: true }); return; }
         if (parsed.error) throw new ConnectionError(parsed.error.message || String(parsed.error));
         returnedModel = parsed.model || returnedModel;
         if (parsed.usage) usage = providerUsage(parsed);
@@ -649,11 +678,12 @@ async function sendViaOpenAI(url, apiKey, model, systemPrompt, userPrompt, maxTo
             if (!completed) trailerDeadline = Date.now() + LLM_DEFAULTS.streamTrailerWait;
             completed = true;
         }
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string') fullContent += delta;
+        observeResponse(onResponse, { responseText: fullContent, partial: !completed, returnedModel, finishReason });
         if (hasProviderRefusal(parsed)) {
             throw new InvalidModelOutputError('the provider reported a refusal or content filter');
         }
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string') fullContent += delta;
     }
 
     try {

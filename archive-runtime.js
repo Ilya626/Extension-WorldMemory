@@ -85,7 +85,16 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         if (options.signal?.aborted) abort();
         try { guard(owner); return await operation(owner); }
         catch (error) { status(owner.controller.signal.aborted ? owner.controller.signal.reason?.message || 'Stopped. Already saved packets were kept.' : error.message); throw error; }
-        finally { options.signal?.removeEventListener('abort', abort); if (job === owner) job = null; onBusyChange(); }
+        finally {
+            // Successful packets already save the journal with their usual
+            // commit. A transport/validation failure still needs one durable
+            // save, without invoking afterSave or writing into another chat.
+            if (owner.responsesDirty && ctx().chatMetadata === owner.metadata && getArchive() === owner.archive) {
+                try { await saveArchive({ archive: owner.archive, context: owner.context }); }
+                catch (error) { status(`Response text is available in this tab but could not be saved: ${error.message}`); }
+            }
+            options.signal?.removeEventListener('abort', abort); if (job === owner) job = null; onBusyChange();
+        }
     }
     function wait(promise, owner) {
         const signal = owner.controller.signal;
@@ -100,6 +109,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     async function persist(owner, reason, packetId = null) {
         guard(owner);
         await saveArchive({ archive: owner.archive, context: owner.context, signal: owner.controller.signal });
+        owner.responsesDirty = false;
         guard(owner);
         try { await afterSave?.({ metadata: owner.metadata, reason, packetId }); }
         catch (error) { status(`Memory saved; local update needs retry: ${error.message}`); }
@@ -114,8 +124,23 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const trace = { id: crypto.randomUUID(), stage, streaming: Boolean(selected.summarizerStreaming), startedAt: Date.now(),
             status: 'sending', systemPrompt, userPrompt: prompt, connection: selected.connectionSource || 'default',
             model: selected.connectionSource === 'openai' ? selected.openaiModel : selected.connectionSource === 'ollama' ? selected.ollamaModel : null,
+            packetId: options.packetId || null,
             responseTokens: selected.summarizerResponseLength || (selected.connectionSource === 'openai' ? selected.openaiMaxTokens
                 : selected.connectionSource === 'ollama' ? selected.ollamaMaxTokens : 0) || 0 };
+        const journal = () => {
+            owner.archive.responses ??= {};
+            owner.archive.responses[trace.id] = { id: trace.id, stage, packetId: trace.packetId, startedAt: trace.startedAt,
+                finishedAt: trace.finishedAt || null, model: trace.returnedModel || trace.model, status: trace.status,
+                responseText: trace.responseText ?? null, rawResponseBody: trace.rawResponseBody ?? null,
+                partial: trace.partial || false, httpStatus: trace.httpStatus ?? null, finishReason: trace.finishReason ?? null,
+                error: trace.error || trace.decodeError || null };
+            owner.responsesDirty = true;
+        };
+        const capture = details => {
+            for (const key of ['responseText', 'rawResponseBody', 'partial', 'httpStatus', 'returnedModel', 'finishReason', 'decodeError'])
+                if (details[key] !== undefined) trace[key] = details[key];
+            journal();
+        };
         requestTrace = [...requestTrace.filter(item => item.metadata === owner.metadata), { metadata: owner.metadata, trace }].slice(-2);
         notifyRequest();
         let idle;
@@ -128,10 +153,15 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         activity();
         try {
             const result = await wait(sendRequest(selected, systemPrompt, prompt,
-                { signal: owner.controller.signal, returnDetails: true, onActivity: activity }), owner);
-            guard(owner); trace.responseText = result.text || ''; trace.status = 'complete'; return { ...result, text: clean(result.text || '') };
+                { signal: owner.controller.signal, returnDetails: true, onActivity: activity, onResponse: capture }), owner);
+            // Capture before source/chat validation and before output cleanup.
+            // Native transports can provide an earlier, unprocessed value.
+            if (!trace.responseText) capture({ responseText: result.text || '' });
+            guard(owner); trace.status = 'complete'; trace.partial = false;
+            trace.processedResponseText = result.text || '';
+            return { ...result, text: clean(result.text || '') };
         } catch (error) { trace.status = 'error'; trace.error = error.message; throw error; }
-        finally { clearTimeout(idle); notifyRequest(); }
+        finally { clearTimeout(idle); trace.finishedAt = Date.now(); journal(); notifyRequest(); }
     }
     const view = archive => ({ layers: [readArchive(archive)],
         legacySourceIds: unique(Object.values(archive.legacy || {}).flatMap(store => store.legacySourceIds || [])),
@@ -289,6 +319,16 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (cached?.wiContext && (cached.wiContext.authorBook !== chatWorldInfo(ctx())
                 || cached.wiContext.owner !== currentWI?.owner || cached.wiContext.book !== currentWI?.book))
                 throw new Error('Saved response belongs to a different WI binding. No WI was changed and no model request was made.');
+            if (cached) {
+                const id = cached.requestId || `packet:${record.id}`;
+                owner.archive.responses ??= {};
+                if (!owner.archive.responses[id]) {
+                    owner.archive.responses[id] = { id, packetId: record.id, stage: 'metadata',
+                        startedAt: cached.savedAt || record.timestamp || 0, status: 'saved-response-replay',
+                        responseText: cached.text, error: cached.error || null };
+                    owner.responsesDirty = true;
+                }
+            }
             const wi = cached ? (cached.wiRequested ? { context: {}, stamp: cached.wiContext } : null)
                 : await references(owner, sources, record.text, record.id);
             let knowledge = null, cachedKnowledgeChanged = false;
@@ -307,10 +347,11 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                     knowledge_characters: knowledge.knowledge_characters, known_topics: knowledge.known_topics || [] } } : {}) });
             status('Stage 2: preparing search metadata and WI for saved L0.');
             const response = cached ? { text: cached.text, usage: cached.usage, tokenCount: cached.tokenCount }
-                : await transport(owner, system, prompt, { ...options, stage: 'metadata' });
+                : await transport(owner, system, prompt, { ...options, stage: 'metadata', packetId: record.id });
             guard(owner); if (sources.length) checkSources(owner, sources);
             if (JSON.stringify(readPacket(owner.archive, record.id)) !== before) throw new Error('Saved L0 changed during annotation. Response not applied.');
             received = cached || { text: response.text, usage: response.usage || null, tokenCount: response.tokenCount ?? null,
+                requestId: requestTrace.findLast(item => item.metadata === owner.metadata && item.trace.stage === 'metadata')?.trace.id || null,
                 textRevision: memoryTextRevision(record.text), sourceFingerprints, wiRequested: Boolean(wi?.context),
                 wiContext: wi?.stamp || null, savedAt: Date.now(), systemPrompt: system, userPrompt: prompt,
                 knowledgeCharacters: JSON.stringify(knowledge?.knowledge_characters || []) };
@@ -323,8 +364,12 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 parsed.warning = [parsed.warning, `WI schema: ${error.message}`].filter(Boolean).join(' ');
             }
             const trace = requestTrace.findLast(item => item.metadata === owner.metadata && item.trace.stage === 'metadata'
-                && item.trace.responseText === response.text)?.trace;
-            if (trace) { trace.parseWarning = parsed.warning || null; notifyRequest(); }
+                && (item.trace.processedResponseText === response.text || item.trace.responseText === response.text))?.trace;
+            if (trace) {
+                trace.parseWarning = parsed.warning || null;
+                if (owner.archive.responses?.[trace.id]) owner.archive.responses[trace.id].parseWarning = trace.parseWarning;
+                notifyRequest();
+            }
             if (!parsed.metadata) throw new Error(parsed.warning || 'No usable metadata returned. L0 is saved; retry metadata backfill only.');
             if (parsed.warning) warn(parsed.warning);
             const boundaries = knowledge ? readKnowledgeBoundaries({ epistemic: parsed.epistemic }, localSources,

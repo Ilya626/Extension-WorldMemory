@@ -46,6 +46,7 @@ test('a broken neighboring section retains complete WI and the raw reply for req
     assert.deepEqual(record.memoryMetadata.wi, metadata.wi);
     assert.match(record.annotationError, /JSON/);
     assert.equal(record.annotationResponse.text, broken);
+    assert.ok(Object.values(f.archive.responses).some(response => response.stage === 'metadata' && response.responseText === broken));
     const calls = f.calls(), prose = record.text;
     await f.runtime.backfillMemoryMetadata({force:true,savedResponsesOnly:true});
     record = readArchive(f.archive)[0];
@@ -63,6 +64,7 @@ test('an incomplete WI value is never completed or substituted over the previous
     assert.deepEqual(record.memoryMetadata, before);
     assert.equal(record.text, original.text);
     assert.match(record.annotationResponse.text, /unfinished/);
+    assert.ok(Object.values(f.archive.responses).some(response => response.responseText.includes('unfinished')));
     const calls = f.calls();
     const retried = await f.runtime.backfillMemoryMetadata({force:true,savedResponsesOnly:true});
     assert.equal(retried.failed, 1);

@@ -1090,12 +1090,23 @@ async function downloadWIDiagnostics() {
         && (record.annotationResponse || record.annotationError)).map(record => ({ packetId: record.id,
         annotationStatus: record.annotationStatus, error: record.annotationError || record.annotationResponse?.error, response: record.annotationResponse || null }));
     const requests = archiveRuntime.inspectPrompts().requests.filter(request => request.stage === 'metadata' || request.stage === 'legacy-wi');
+    const byId = new Map(Object.values(memory.archive?.responses || {}).map(response => [response.id, response]));
+    for (const request of requests) if (!byId.has(request.id)) byId.set(request.id, request);
+    for (const failure of failures) if (typeof failure.response?.text === 'string') {
+        const id = failure.response.requestId || `packet:${failure.packetId}`;
+        if (!byId.has(id)) byId.set(id, { id, packetId: failure.packetId, stage: 'metadata',
+            responseText: failure.response.text, error: failure.error });
+    }
+    const responses = [...byId.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    const responseCount = responses.filter(response => typeof response.responseText === 'string' && response.responseText.length > 0).length;
+    const rawResponseBodyCount = responses.filter(response => typeof response.rawResponseBody === 'string' && response.rawResponseBody.length > 0).length;
     download(`WorldMemory-WI-diagnostics-${Date.now()}.json`, { format: 'world-memory-wi-diagnostics-v1',
-        version: VERSION, createdAt: new Date().toISOString(), selectedBook: chatWorldInfo(context), destinationBook: memory.book,
-        coverage: wiCoverage(memory), failures, requests });
-    status(failures.some(item => item.response) || requests.some(item => item.responseText)
-        ? 'Диагностика WI скачана: ответы модели, причины ошибок и запросы. Файл содержит текст вашей игры; поля API-подключения не включены.'
-        : 'Диагностика скачана, но сырого ответа здесь ещё нет. Новые ошибки подготовки будут сохранять ответ автоматически, в том числе после перезагрузки.');
+        version: VERSION, createdAt: new Date().toISOString(), responseCount, rawResponseBodyCount, responses,
+        selectedBook: chatWorldInfo(context), destinationBook: memory.book, coverage: wiCoverage(memory), failures, requests });
+    status(responseCount
+        ? `В диагностике ${responseCount} полных/частичных текстов ответа: responses → responseText. Они сохраняются после перезагрузки. Файл содержит текст игры; поля API-подключения не включены.`
+        : rawResponseBodyCount ? `Текст модели не извлечён, но в файле есть ${rawResponseBodyCount} сырых HTTP/stream ответов: responses → rawResponseBody.`
+            : 'В файле 0 текстов ответа модели — только сведения об ошибках/запросах. Новых полученных ответов в этом чате ещё нет; утраченные старой версией ответы восстановить нельзя.');
 }
 async function exportBackup() {
     const context = ctx(), metadata = context.chatMetadata, memory = state();
