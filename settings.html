@@ -75,7 +75,7 @@
           </details>
         </details>
         <details class="wm-advanced"><summary>Advanced summarizer context</summary>
-          <label class="checkbox_label"><input id="wm_summarizer_wi" data-setting="summarizerWorldInfo" type="checkbox"><span>Provide active native WI as summarizer context</span></label>
+          <label class="checkbox_label"><input id="wm_summarizer_wi" data-setting="summarizerWorldInfo" type="checkbox"><span>Provide card-linked WI as summarizer context</span></label>
           <div class="wm-field"><label for="wm_summarizer_wi_percent">WI context allowance (% of source tokens)</label><input id="wm_summarizer_wi_percent" data-setting="summarizerWorldInfoPercent" class="text_pole" type="number" min="0" max="100" step="1"></div>
           <small class="wm-muted">Reference context helps identify entities. This allowance applies to background requests. Set the reply WI budget in ST's World Info settings.</small>
         </details>
@@ -169,6 +169,9 @@
         </details>
         <div id="wm_saved_wi_status" class="wm-muted" role="status"></div>
         <div id="wm_book" class="wm-muted"></div>
+        <div class="wm-field"><label for="wm_card_wi">Card WI · source for background requests</label><select id="wm_card_wi" class="text_pole"></select></div>
+        <button id="wm_link_card_wi" class="menu_button">Link selected WI to this card</button>
+        <div id="wm_card_wi_status" class="wm-muted"></div>
         <details class="wm-advanced"><summary>Advanced WI writing and insertion</summary>
           <div class="wm-grid">
             <div class="wm-field"><label for="wm_wi_topk">Maximum semantic WI candidates</label><input id="wm_wi_topk" data-setting="wiSemanticTopK" class="text_pole" type="number" min="1" max="32" step="1"></div>

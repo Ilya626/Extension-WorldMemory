@@ -6,7 +6,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains a separate World Info reference book for characters and other entities.
 
-**0.5.10 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.11 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 For Chat Completion, history first uses its configured allowance. After ST assembles the full request, a final local stage measures the remaining space and adds more already ranked history details towards the desired context. It preserves the complete outline, previous details, raw tail, WI and manual settings. Whole passages must fit the remaining space; an already overflowing request is kept whole. Protected exchanges remain outside the desired-context budget. This stage adds no model or embedding calls and does not yet apply to Text Completion. The UI shows the final request separately from the planning allocations.
 
@@ -176,6 +176,8 @@ A new packet uses **two sequential background generation requests** through the 
 2. **Prepare search notes and optional WI.** The model receives the saved L0 and the same originals to prepare a short navigation thread (L′), source-linked search excerpts and entity-reference updates. When enabled, information events are another optional field in this same response. Previous summaries and WI help identify subjects; the packet's originals supply evidence for new claims.
 
 These requests are separate from your ordinary chat reply. Embedding requests also send indexed text and search queries to the configured embedding service. Changed sources are indexed as needed; unchanged vectors are reused. Background generation can receive native WI as read-only context, controlled by **Advanced summarizer context**.
+
+**Card WI isolation:** in **World Info · entity reference → Card WI**, choose a book and click **Link selected WI to this card**, or use ST's native character book binding. Background author-lore scans use only that explicitly linked primary book, even if other books are globally active or open in the WI editor. Filtering happens before native matching, recursion, groups and budgets. If no book is linked, L0 and search metadata can still be saved, but WI updates wait for the binding. Generated references continue to use their separate chat-scoped memory book; the author book is read-only. Ordinary RP activation and your active book selections remain unchanged.
 
 The main-panel **Compression trigger** decides when eligible older raw text is ready to compress. **Maximum source tokens per call**, under **Summarizer connection**, separately limits how many source tokens one background request processes; it is not the compression threshold. The permanent raw tail and protected exchanges remain. **Pause automatic summarization** is under **Advanced history and packet settings**. Original messages remain in the chat; hiding controls decide which summarized messages are sent to the model. Reapplying automatic hiding is off by default to preserve manual visibility choices.
 

@@ -13,7 +13,8 @@ import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
 import { placeSceneProfiles, removeDuplicateProfiles, profileSignature } from './scene-wi.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
 import { sourceId } from './vendor/summaryception/summary-sources.js';
-import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal } from './vendor/summaryception/world-info-context.js';
+import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudget, getSummaryWorldInfoSources, getSummaryWorldInfoSignal,
+    characterWorldInfo, requireCharacterWorldInfo } from './vendor/summaryception/world-info-context.js';
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableBackup, portableCard, portablePng } from './card-transfer.js';
@@ -32,6 +33,7 @@ const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awaren
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
 let history, archiveRuntime, semanticWI, knowledgeRuntime;
 let nativeReferenceScope = null;
+let updateAuthorBook = null;
 let restoringCardGame = false;
 let cardRestoreTimer = null;
 let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nativePromptSize = null, wiSize = null, wiMeasurementSerial = 0;
@@ -123,6 +125,8 @@ const names = value => [...new Set(value.split(/\r?\n/).map(name => name.trim())
 function unchanged(metadata) {
     controller?.signal.throwIfAborted();
     if (ctx().chatMetadata !== metadata) throw new Error('Chat changed. The result was not written to the new chat.');
+    if (updateAuthorBook !== null && characterWorldInfo(ctx()) !== updateAuthorBook)
+        throw new Error('The card WI binding changed. The result was not written; retry with the current linked book.');
 }
 async function getBook(create = false) {
     const memory = state();
@@ -235,6 +239,7 @@ function syncMainNames(book) {
     }
 }
 async function injectBook(payload) {
+    if (getSummaryWorldInfoSources() !== null) return;
     const memory = state();
     if (!settings().enabled || !memory) return;
     if (!memory.book && memory.cloneFrom) await getBook(true);
@@ -339,13 +344,16 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
     if (!settings().enabled || !settings().auto || !bridge()?.snapshot) return null;
     const metadata = ctx().chatMetadata;
     let identity = null;
+    const authorBook = characterWorldInfo(ctx());
     const guard = () => {
         signal?.throwIfAborted();
         if (ctx().chatMetadata !== metadata) throw new Error('Chat changed while preparing WI context.');
+        if (characterWorldInfo(ctx()) !== authorBook) throw new Error('The card WI binding changed while preparing references.');
         if (identity && (state()?.owner !== identity.owner || state()?.book !== identity.book)) throw new Error('The WI book changed while preparing references.');
     };
     try {
         guard();
+        requireCharacterWorldInfo(ctx());
         // Commit previous saved tails before the next L0 request; this path never calls a model.
         await update(false); guard();
         if (busy) return null;
@@ -398,7 +406,7 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
                 existing_index: index, retained_evidence: references,
                 native_world_info_readonly: nativeReference,
                 instruction: 'The existing_index is the catalogue of managed records, including inactive ones: match existing subjects instead of creating duplicates. retained_evidence contains their prior played-source facts. native_world_info_readonly contains Constant/key-activated author lore selected by ST; use it as background and identity support, never as a newly played event or editable UID. Return current-packet contributions only in wi.updates[].facts. Merge retained_evidence and the current sources into concise entity references, not episode logs, respecting source order. Manual records are read-only. UIDs without retained_evidence receive facts only; prior evidence is preserved locally.' },
-            stamp: { version: 1, owner: identity.owner, book: identity.book, omittedPacketId: omit, referenceUIDs, entryRevisions } };
+            stamp: { version: 1, owner: identity.owner, book: identity.book, authorBook, omittedPacketId: omit, referenceUIDs, entryRevisions } };
     } catch (error) {
         if (signal?.aborted) throw error;
         status(`WI context unavailable: ${error.message} L0 can still be saved. Retry saved WI or Update legacy WI.`);
@@ -407,6 +415,9 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
 }
 function summaryRequest(packet, book) {
     const updates = readSummaryWI(packet.memoryMetadata?.wi);
+    const authorBook = packet.memoryMetadata?.wiContext?.authorBook;
+    if (authorBook !== undefined && authorBook !== characterWorldInfo(ctx()))
+        throw new Error('Saved WI was prepared for a different card-linked book. Retry metadata for the current binding.');
     const stamp = packet.memoryMetadata?.wiContext, included = new Set();
     if (stamp && (stamp.version !== 1 || stamp.owner !== state().owner || stamp.book !== state().book)) {
         throw new Error('Saved WI belongs to a different book revision. Refine this L0 or use Update legacy WI.');
@@ -549,6 +560,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
     if (!snapshot.chatId) { status('Open a character chat first.'); return; }
     busy = true; controller = new AbortController(); renderBusy();
     try {
+        updateAuthorBook = cleanupOnly ? null : requireCharacterWorldInfo(ctx());
         let book = await getBook(!cleanupOnly);
         if (!book) return;
         if (!cleanupOnly) {
@@ -613,7 +625,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         console.error('[World Memory]', error);
         status(controller?.signal.aborted ? 'Stopped. Already saved packets were kept.' : error.message);
         if (!controller?.signal.aborted) toastr.warning(error.message, 'World Memory');
-    } finally { controller = null; busy = false; renderBusy(); await render(); }
+    } finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); }
 }
 async function backfillSpine() {
     if (busy || !bridge() || bridge().isBusy()) return;
@@ -657,7 +669,7 @@ function schedule() {
 }
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
-    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize').prop('disabled', working);
+    $('#wm_update, #wm_retry_saved_wi, #wm_backfill_metadata, #wm_backfill_spine, #wm_summarize, #wm_link_card_wi, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
 }
@@ -866,7 +878,17 @@ async function render() {
     scheduleContextStatistics();
     const integration = globalThis.RussianWIForms?.getStatus?.();
     document.getElementById('wm_integration').textContent = `Archive: ${bridge()?.version || 'loading'} · Russian WI: ${integration ? integration.enabled ? integration.ready ? 'ready' : 'loading dictionary' : 'disabled' : 'not loaded (optional)'}`;
-    document.getElementById('wm_book').textContent = memory?.book ? `Native book: ${memory.book}` : 'A separate chat-scoped book will be created on the first update.';
+    document.getElementById('wm_book').textContent = memory?.book ? `Generated memory destination: ${memory.book}` : 'Generated memory uses a separate chat-scoped book, never the active editor book.';
+    const cardWI = document.getElementById('wm_card_wi'), linkedWI = characterWorldInfo(ctx());
+    const avatar = ctx().characters?.[ctx().characterId]?.avatar || '';
+    const selectedWI = cardWI.dataset.avatar === avatar ? cardWI.value : linkedWI;
+    cardWI.replaceChildren(new Option('Choose a WI book to link to this card…', ''),
+        ...(nativeWI.world_names || []).map(name => new Option(name, name)));
+    cardWI.value = (nativeWI.world_names || []).includes(selectedWI) ? selectedWI : linkedWI;
+    cardWI.dataset.avatar = avatar;
+    document.getElementById('wm_card_wi_status').textContent = linkedWI
+        ? `Card WI source: ${linkedWI}. Other active books are ignored by background WI requests.`
+        : 'No card WI linked. Choose a book and click Link to card before preparing WI. Saved history is kept.';
     const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status !== 'applied');
     document.getElementById('wm_saved_wi_status').textContent = wiPending.length
         ? `${wiPending.length} saved WI result(s) need attention. ${wiPending[0].message} L0 is retained; Retry saved WI uses no model request.`
@@ -1000,6 +1022,18 @@ async function writeCardExtensions(avatar, card, extensions) {
         }
     }
     return written;
+}
+async function linkCardWI() {
+    if (busy || archiveRuntime.isBusy()) throw new Error('Wait for the current request to finish before changing the card WI.');
+    const avatar = selectedCardAvatar(), metadata = ctx().chatMetadata;
+    const name = document.getElementById('wm_card_wi').value;
+    if (!name || !nativeWI.world_names.includes(name)) throw new Error('Choose an existing World Info book. Create or import one in ST World Info first.');
+    const card = await readCharacterCard(avatar);
+    if (selectedCardAvatar() !== avatar || ctx().chatMetadata !== metadata || busy || archiveRuntime.isBusy())
+        throw new Error('The selected chat changed or started a request. Link the book again when idle.');
+    await writeCardExtensions(avatar, card, { ...card.data.extensions, world: name });
+    await render();
+    status(`Linked ${name} to the character card. Active/global WI selections were not changed.`);
 }
 function selectedCardAvatar() {
     const context = ctx(), avatar = context.characters[context.characterId]?.avatar;
@@ -1412,6 +1446,9 @@ async function init() {
         status('Main character names saved. They are tracked in the next L0 request; Update legacy WI can refresh older profiles.');
     });
     $('#wm_update').on('click', () => { void update(true); });
+    $('#wm_link_card_wi').on('click', () => { void linkCardWI().catch(error => {
+        status(error.message); toastr.warning(error.message, 'World Memory');
+    }); });
     $('#wm_prompt_preview_stage, #wm_prompt_request').on('change', renderSummaryPrompts);
     $('#wm_reset_summary_prompts').on('click', () => {
         if (busy || archiveRuntime.isBusy()) return;
