@@ -19,8 +19,11 @@ import { populateProfileDropdown } from './vendor/summaryception/connectionutil.
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
 import { collectSupportBundle } from './support-export.js';
+import { prepareSupportImport } from './support-import.js';
+import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
+import { parseModelJson } from './model-json.js';
 
-const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
+const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
     history: true, hints: true, historySemantic: true, historySpineRerank: false, historyEmbeddingMode: 'api', wiSemantic: false, wiSemanticTopK: 6, wiSemanticThreshold: 0.45,
     historyMaxTokens: 12000, promptTargetTokens: 32000, retainedContextTokens: 8000, compressionTriggerTokens: 4000,
@@ -32,7 +35,7 @@ const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awaren
     summaryLanguage: 'en', summaryCustomLanguage: '', summarizerWorldInfo: true, summarizerWorldInfoPercent: 20,
     injectionPosition: 0, injectionDepth: 1, injectionRole: 0, injectionScan: false, injectionTemplate: '[Earlier history]\n{{summary}}' };
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
-let history, archiveRuntime, semanticWI, knowledgeRuntime;
+let history, archiveRuntime, semanticWI, knowledgeRuntime, wiDiffRuntime;
 let nativeReferenceScope = null;
 let updateAuthorBook = null;
 let restoringCardGame = false;
@@ -41,10 +44,21 @@ let budgetRenderSerial = 0, budgetRenderTimer, lastContextStatistics = null, nat
 let lastNativeWIScan = null;
 const ctx = () => SillyTavern.getContext();
 const bridge = () => archiveRuntime;
+const hasSavedWI = packet => Boolean(packet.memoryMetadata?.wiDiff || Array.isArray(packet.memoryMetadata?.wi?.updates));
+const wiAttemptRevision = packet => compactRevision(packet.memoryMetadata?.wiDiff
+    ? [packetSignature(packet), packet.memoryMetadata.wiDiff, packet.memoryMetadata.wiContext || null]
+    : [packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+function diffStatus(memory = state()) {
+    const diff = memory?.wiDiffState;
+    if (!diff) return settings().wiDiffs ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
+    const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
+    return `DIFF: подтверждено тезисов ${count}.${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : ' Непроверенных предложений нет.'}`;
+}
 function wiCoverage(memory) {
     const packets = Object.values(memory?.archive?.records || {}).filter(packet => !packet.deleted);
-    const prepared = packets.filter(packet => Array.isArray(packet.memoryMetadata?.wi?.updates));
-    const empty = prepared.filter(packet => !packet.memoryMetadata.wi.updates.length).length;
+    const prepared = packets.filter(hasSavedWI);
+    const empty = prepared.filter(packet => packet.memoryMetadata.wiDiff
+        ? !packet.memoryMetadata.wiDiff.add.length && !packet.memoryMetadata.wiDiff.remove.length : !packet.memoryMetadata.wi.updates.length).length;
     const applied = packets.filter(packet => memory?.wiPackets?.[packet.id]?.status === 'applied').length;
     const savedResponses = packets.filter(packet => packet.annotationResponse).length;
     return `WI по сохранённым L0: подготовлено ${prepared.length} / ${packets.length}, из них пустых ${empty}; применено ${applied}. Без результата WI: ${packets.length - prepared.length}.${savedResponses ? ` Ответов для проверки: ${savedResponses}; кнопки повторного разбора и диагностики находятся на основной панели.` : ''}`;
@@ -52,7 +66,7 @@ function wiCoverage(memory) {
 function renderWIProblem(memory = state()) {
     const output = document.getElementById('wm_wi_problem'); if (!output) return;
     const records = Object.values(memory?.archive?.records || {}).filter(record => !record.deleted);
-    const missing = records.filter(record => !Array.isArray(record.memoryMetadata?.wi?.updates)).length;
+    const missing = records.filter(record => !hasSavedWI(record)).length;
     const failures = records.filter(record =>
         record.annotationResponse && (record.annotationError || record.annotationResponse.error));
     output.hidden = !failures.length && !missing;
@@ -68,6 +82,7 @@ const status = text => {
     if (node) node.textContent = pending.length ? `${text}\n${receipt}` : text;
     for (const feedback of document.querySelectorAll('.wm-wi-feedback')) feedback.textContent = `${text}\n${destination} ${receipt}\n${wiCoverage(memory)}`;
     renderWIProblem(memory);
+    const diffOutput = document.getElementById('wm_diff_status'); if (diffOutput) diffOutput.textContent = diffStatus(memory);
     renderBusy();
 };
 const settings = () => {
@@ -331,6 +346,14 @@ function syncMainNames(book) {
     }
 }
 async function injectBook(payload) {
+    // Imported copies use their own books even if an original is still globally
+    // selected. Keep the user's global selection unchanged for every other chat.
+    const importedBooks = ctx().chatMetadata.worldMemoryImport?.books;
+    if (importedBooks) for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
+        const entries = payload[key];
+        if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry =>
+            !Object.hasOwn(importedBooks, entry.world) || importedBooks[entry.world] === entry.world));
+    }
     if (getSummaryWorldInfoSources() !== null) return;
     const memory = state();
     if (!settings().enabled || !memory) return;
@@ -436,6 +459,17 @@ function orderFor(entry, packets) {
 }
 async function prepareSummaryContext({ sourceIds = [], existingSummary = null, signal } = {}) {
     if (!settings().enabled || !settings().auto || !bridge()?.snapshot) return null;
+    if (settings().wiDiffs) {
+        signal?.throwIfAborted();
+        await update(false); signal?.throwIfAborted();
+        const packet = bridge().snapshot({ effective: false }).packets.find(packet => packet.text === existingSummary
+            && signature([...packet.sourceMessageIds].sort()) === signature([...sourceIds].sort()));
+        const failed = Object.entries(state()?.wiPackets || {}).find(([id, item]) => id !== packet?.id
+            && item.mode === 'diff' && item.status === 'error');
+        if (failed) throw new Error(`Предыдущий DIFF не обработан: ${failed[1].message}`);
+        const prepared = await wiDiffRuntime.prepare({ sourceIds, packetId: packet?.id });
+        signal?.throwIfAborted(); return prepared;
+    }
     const metadata = ctx().chatMetadata;
     let identity = null;
     const authorBook = chatWorldInfo(ctx());
@@ -654,13 +688,15 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
     let snapshot = bridge().snapshot();
     const metadata = snapshot.metadata;
     if (!snapshot.chatId) { status('Open a character chat first.'); return; }
+    if (force && settings().wiDiffs) { status('В режиме DIFF используйте подготовку поиска / WI. Последнее предложение проверяется отдельной кнопкой; legacy refresh не применяется к DIFF.'); return; }
     busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = cleanupOnly ? null : requireChatWorldInfo(ctx());
         let book = await getBook(!cleanupOnly);
         if (!book) return;
         snapshot = bridge().snapshot();
-        if (!cleanupOnly) {
+        const diffManaged = settings().wiDiffs || Boolean(state().wiDiffState);
+        if (!cleanupOnly && !diffManaged) {
             const beforeNames = structuredClone(book); syncMainNames(book);
             book = await saveBook(book, metadata, beforeNames);
         }
@@ -669,7 +705,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const tracked = new Set([...Object.keys(state().packets), ...ownedEntries(book, state().owner)
             .flatMap(entry => Object.keys(entryMeta(entry).contributions || {}))]);
         const removed = [...tracked].filter(id => !current.has(id));
-        book = await removePackets(book, removed, snapshot.packets, metadata, { local: !force });
+        if (!diffManaged) book = await removePackets(book, removed, snapshot.packets, metadata, { local: !force });
         for (const id of Object.keys(state().wiPackets)) if (!current.has(id)) delete state().wiPackets[id];
         // A deleted/edited/regenerated source must stop contributing even if its optional replacement WI failed.
         const revised = snapshot.packets.filter(packet => tracked.has(packet.id) && (packet.stale
@@ -678,20 +714,37 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                 const saved = entryMeta(entry).contributions[packet.id]?.packetRevision;
                 return saved && saved !== compactRevision(packetSignature(packet));
             }))).map(packet => packet.id);
-        book = await removePackets(book, revised, snapshot.packets, metadata, { local: true, preserveEmpty: true });
-        const attemptSignature = packet => compactRevision([packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+        if (!diffManaged) book = await removePackets(book, revised, snapshot.packets, metadata, { local: true, preserveEmpty: true });
+        else if (state().wiDiffState) { await wiDiffRuntime.materialize(); book = await getBook(); }
+        const attemptSignature = wiAttemptRevision;
         for (const packet of snapshot.packets.filter(packet => packet.stale)) state().wiPackets[packet.id] = {
             revision: attemptSignature(packet), status: 'stale', message: 'Original sources changed. Regenerate the affected L0; old automatic contributions were removed.' };
         if (cleanupOnly) { await saveState(); return; }
         const pending = snapshot.packets.filter(packet => !packet.stale && (force
             || state().wiPackets[packet.id]?.revision !== attemptSignature(packet)
-            || (retrySaved && state().wiPackets[packet.id]?.status !== 'applied')));
+            || (retrySaved && !['applied', 'proposed', 'rejected'].includes(state().wiPackets[packet.id]?.status))));
         for (let i = 0; i < pending.length; i++) {
             unchanged(metadata); status(`Updating packet ${i + 1} / ${pending.length} · source ${sourceLabel(pending[i])}`);
             const packet = pending[i], revision = attemptSignature(packet);
+            if (packet.memoryMetadata?.wiDiff) {
+                try {
+                    const previous = state().wiDiffState?.pending;
+                    const result = await wiDiffRuntime.consume(packet);
+                    recordDiffOutcome(packet, result, previous);
+                    book = await getBook();
+                } catch (error) {
+                    unchanged(metadata);
+                    state().wiPackets[packet.id] = { revision, status: 'error', mode: 'diff', message: error.message };
+                    await saveState(); throw error;
+                }
+                await saveState(); continue;
+            }
             const saved = Boolean(packet.memoryMetadata?.wi);
             if (!saved && !force) {
-                state().wiPackets[packet.id] = { revision, status: 'pending', message: 'No saved WI updates. Refine this L0 or use Update legacy WI.' };
+                state().wiPackets[packet.id] = packet.memoryMetadata?.wiContext?.diff
+                    ? { revision, status: 'error', mode: 'diff', message: packet.annotationError
+                        || 'DIFF не разобран. L0 и прежний WI сохранены. Повторите подготовку этого блока или разбор сохранённого ответа.' }
+                    : { revision, status: 'pending', message: 'No saved WI updates. Refine this L0 or use Update legacy WI.' };
                 continue;
             }
             try {
@@ -714,16 +767,66 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const stale = snapshot.packets.filter(packet => packet.stale).length;
         const waiting = ownedEntries(book, state().owner).filter(entry => entryMeta(entry).main && !entry.content?.trim()).length;
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
-        const wiPending = Object.values(state().wiPackets).filter(item => item.status !== 'applied');
+        const wiPending = Object.values(state().wiPackets).filter(item => !['applied', 'proposed', 'rejected'].includes(item.status));
         const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
-            : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. Запись подтверждена на диске.${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
+            : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${diffManaged ? diffStatus() : 'Запись подтверждена на диске.'}${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
     } catch (error) {
         if (cleanupOnly) throw error;
         console.error('[World Memory]', error);
         status(controller?.signal.aborted ? 'Stopped. Already saved packets were kept.' : error.message);
         if (!controller?.signal.aborted) toastr.warning(error.message, 'World Memory');
     } finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); }
+}
+function recordDiffOutcome(packet, result, previous) {
+    const memory = state(), packets = bridge().snapshot({ effective: false }).packets;
+    memory.wiPackets[packet.id] = { revision: wiAttemptRevision(packet), status: result.status, mode: 'diff' };
+    memory.packets[packet.id] = packetSignature(packet);
+    if (previous && memory.wiDiffState.lastReview?.proposalId === previous.id) {
+        const prior = packets.find(item => item.id === previous.packetId);
+        if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior),
+            status: memory.wiDiffState.lastReview.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+    }
+}
+async function reviewLastWIDiff({ savedOnly = false } = {}) {
+    if (busy || !wiDiffRuntime || bridge().isBusy()) return;
+    const metadata = ctx().chatMetadata, memory = state();
+    if (!memory?.wiDiffState?.pending && !memory?.wiDiffReview?.responseText) { status('Нет предложения WI для проверки.'); return; }
+    clearTimeout(timer); busy = true; controller = new AbortController(); renderBusy();
+    try {
+        updateAuthorBook = requireChatWorldInfo(ctx());
+        let saved = savedOnly ? memory.wiDiffReview : null;
+        if (!saved) {
+            const prepared = await wiDiffRuntime.reviewContext(); unchanged(metadata);
+            const prompt = JSON.stringify({ task: 'Explicitly review the last pending WI proposal. Return one memory_metadata block with wiDiff only; no new proposal.',
+                world_memory_context: prepared.context, new_sources: [] });
+            saved = memory.wiDiffReview = { packet: prepared.packet, systemPrompt: prepared.systemPrompt,
+                userPrompt: prompt, status: 'requesting', responseText: '' };
+            await saveState(); unchanged(metadata);
+            status('Проверка последнего предложения WI · один запрос к модели.');
+            const response = await bridge().request(prepared.systemPrompt, prompt, { signal: controller.signal,
+                stage: 'wi-review', packetId: prepared.packet.id, responseTokens: settings().responseTokens });
+            unchanged(metadata); saved.responseText = response.text; saved.status = 'received';
+            await saveState(); unchanged(metadata);
+        }
+        if (!saved?.responseText) throw new Error('Нет сохранённого ответа для повторного разбора.');
+        const parsed = parseModelJson(saved.responseText), wire = parsed.wiDiff || parsed;
+        saved.packet.memoryMetadata.wiDiff = wire;
+        const previous = memory.wiDiffState.pending;
+        await wiDiffRuntime.consume(saved.packet); unchanged(metadata);
+        // The synthetic review packet is a receipt, not an archive/history record.
+        if (previous) {
+            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === previous.packetId);
+            if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+        }
+        saved.status = 'applied'; saved.error = null; await saveState(); unchanged(metadata);
+        history.changed(); status(`${wire.review.decision === 'accept' ? 'Предложение WI подтверждено и записано.' : 'Предложение отклонено; прежний WI сохранён.'} ${diffStatus()}`);
+    } catch (error) {
+        if (ctx().chatMetadata === metadata && state() === memory && memory.wiDiffReview) {
+            memory.wiDiffReview.error = error.message; await saveState();
+        }
+        status(error.message);
+    } finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); await renderArchive(); }
 }
 async function backfillSpine() {
     if (busy || !bridge() || bridge().isBusy()) return;
@@ -774,7 +877,11 @@ function renderBusy() {
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
     $('#wm_coverage_prepare, #wm_coverage_apply, #wm_coverage_spine, .wm-coverage-mutation').prop('disabled', working);
-    $('#wm_export_all').prop('disabled', working);
+    $('#wm_export_all, #wm_import_all').prop('disabled', working);
+    $('#wm_wi_diffs').prop('disabled', working);
+    $('#wm_update').prop('disabled', working || settings().wiDiffs);
+    $('#wm_review_diff').prop('disabled', working || !state()?.wiDiffState?.pending);
+    $('#wm_retry_diff_review').prop('disabled', working || !state()?.wiDiffReview?.responseText || state()?.wiDiffReview?.status === 'applied');
     $('#wm_coverage_stop').prop('hidden', !working);
     const activity = document.getElementById('wm_coverage_working');
     if (activity) {
@@ -791,12 +898,13 @@ function coverageState(kind, label) { return { kind, label }; }
 function coveragePacket(packet, memory) {
     const saved = memory.archive?.records?.[packet.id] || {}, meta = packet.memoryMetadata;
     const linked = packet.sourceStatus === 'linked', stale = packet.stale;
-    const wi = Array.isArray(meta?.wi?.updates), savedWI = Array.isArray(saved.memoryMetadata?.wi?.updates);
+    const wi = hasSavedWI(packet), savedWI = hasSavedWI(saved), diff = meta?.wiDiff;
     const stamp = meta?.wiContext;
     const binding = !stamp || (stamp.version === 1 && stamp.owner === memory.owner && stamp.book === memory.book
         && (stamp.authorBook === undefined || stamp.authorBook === chatWorldInfo(ctx())));
-    const revision = compactRevision([packetSignature(packet), meta?.wi || null, meta?.wiContext || null]);
+    const revision = wiAttemptRevision(packet);
     const receipt = memory.wiPackets?.[packet.id];
+    const currentReceipt = !stale && binding && receipt?.revision === revision;
     const applied = !stale && linked && binding && meta?.sourceStatus !== 'summary-only'
         && receipt?.status === 'applied' && receipt.revision === revision;
     const annotationWarning = Boolean(packet.annotationError || packet.annotationResponse?.error || packet.annotationStatus === 'partial');
@@ -814,17 +922,21 @@ function coveragePacket(packet, memory) {
     const prepared = stale ? coverageState('warn', 'WI требует обновления: исходники изменились')
         : wi ? coverageState(!linked || !binding || meta.sourceStatus === 'summary-only' ? 'warn' : 'ok', !linked ? 'WI сохранён; исходники недоступны'
             : meta.sourceStatus === 'summary-only' ? 'WI сохранён по L0, без исходного подтверждения'
-            : !binding ? 'WI сохранён для другой привязки книги' : meta.wi.updates.length ? `WI подготовлен: ${meta.wi.updates.length} изменений` : 'Проверено: новых фактов WI нет')
+            : !binding ? 'WI сохранён для другой привязки книги' : diff ? `DIFF подготовлен: +${diff.add.length} / −${diff.remove.length}`
+                : meta.wi.updates.length ? `WI подготовлен: ${meta.wi.updates.length} изменений` : 'Проверено: новых фактов WI нет')
             : coverageState(!linked || savedWI ? 'warn' : annotationWarning ? 'error' : 'pending', !linked ? 'WI нужны исходники'
                 : savedWI ? 'Сохранённый WI не соответствует текущему L0' : annotationWarning ? 'WI не подготовлен; проверьте ответ' : 'WI ещё не подготовлен');
-    const written = applied ? coverageState('ok', !wi ? 'WI записан через legacy; отдельный результат подготовки не сохранён'
+    const written = applied ? coverageState('ok', diff ? 'DIFF проверен; подтверждённое состояние записано'
+        : !wi ? 'WI записан через legacy; отдельный результат подготовки не сохранён'
         : meta.wi.updates.length ? 'Текущий результат WI записан' : 'Пустой результат применён; запись не нужна')
         : receipt?.status === 'error' ? coverageState('error', `Ошибка записи WI: ${receipt.message || 'причина не сохранена'}`)
             : stale || receipt?.status === 'stale' || (receipt?.status === 'applied' && !applied)
                 ? coverageState('warn', 'Прежний статус записи WI не подтверждает текущую версию / книгу')
-                : coverageState('pending', wi ? 'WI готов, но текущая запись не подтверждена' : 'WI ещё не записан');
+                : currentReceipt && receipt?.status === 'proposed' ? coverageState('pending', 'Предложение сохранено; ждёт следующего блока или явной проверки')
+                    : currentReceipt && receipt?.status === 'rejected' ? coverageState('warn', 'Предложение отклонено; прежний WI сохранён')
+                        : coverageState('pending', wi ? 'WI готов, но текущая запись не подтверждена' : 'WI ещё не записан');
     const cells = [l0, spine, search, prepared, written];
-    return { packet, cells, linked, applied, wi, missing: prepared.kind !== 'ok',
+    return { packet, cells, linked, applied, wi, needsApply: wi && (!currentReceipt || !['applied', 'proposed', 'rejected'].includes(receipt?.status)), missing: prepared.kind !== 'ok',
         attention: cells.some(cell => cell.kind === 'warn' || cell.kind === 'error'), needsSpine: !stale && !packet.manual && !packet.storySpine };
 }
 function coverageRange(packet) {
@@ -878,7 +990,7 @@ function coverageDetails(row, metadata) {
         () => archiveRuntime.backfillMemoryMetadata({ packetId: packet.id, force: row.wi, responseTokens: settings().responseTokens })));
     if (packet.annotationResponse) actions.append(action('Повторить разбор ответа · 0 запросов',
         () => archiveRuntime.backfillMemoryMetadata({ packetId: packet.id, force: true, savedResponsesOnly: true, responseTokens: settings().responseTokens })));
-    if (row.wi && !row.applied) actions.append(action('Записать готовые WI · 0 запросов', () => update(false, true)));
+    if (row.needsApply) actions.append(action('Обработать готовый WI · 0 запросов', () => update(false, true)));
     content.append(actions); return content;
 }
 function renderCoverage(snapshot = archiveRuntime?.snapshot({ effective: false })) {
@@ -921,7 +1033,7 @@ function renderCoverage(snapshot = archiveRuntime?.snapshot({ effective: false }
         : missing ? `Без подготовленного WI: ${missing} блок(ов). Замечание к поисковой цитате не отменяет готовый WI. Подготовка использует модель; число вызовов зависит от настроек.`
         : 'У всех блоков сохранён результат WI, включая успешные пустые результаты. Замечания и запись в текущую книгу показаны отдельно.';
     document.getElementById('wm_coverage_prepare').hidden = !rows.length;
-    document.getElementById('wm_coverage_apply').hidden = !rows.some(row => row.wi && !row.applied);
+    document.getElementById('wm_coverage_apply').hidden = !rows.some(row => row.needsApply);
     document.getElementById('wm_coverage_spine').hidden = !rows.some(row => row.needsSpine);
     renderBusy();
 }
@@ -1092,7 +1204,7 @@ function renderHistoryPlacement(s = settings()) {
 }
 function renderSummaryPrompts() {
     if (!archiveRuntime?.inspectPrompts || !document.getElementById('wm_prompt_preview')) return;
-    const s = settings(), view = archiveRuntime.inspectPrompts({ wiSystemPrompt: s.auto ? SUMMARY_WI_SYSTEM : null,
+    const s = settings(), view = archiveRuntime.inspectPrompts({ wiSystemPrompt: s.auto ? (s.wiDiffs ? DIFF_SYSTEM : SUMMARY_WI_SYSTEM) : null,
         knowledgeActive: Boolean(s.knowledgeBoundaries) });
     for (const [id, key, effective] of [['wm_summary_system_prompt', 'summarizerSystemPrompt', view.baseSystem],
         ['wm_summary_user_prompt', 'summarizerUserPrompt', view.userTemplate]]) {
@@ -1104,7 +1216,7 @@ function renderSummaryPrompts() {
     document.getElementById('wm_prompt_preview').value = view[choice] || view.l0System;
     const select = document.getElementById('wm_prompt_request'), previous = select.value;
     const labels = { l0: 'Этап 1 · L0 + L″', 'refine-l0': 'Этап 1 · Refine L0 + L″', metadata: 'Этап 2 · L′ / поиск / WI',
-        'story-spine': 'Подготовка L″', 'legacy-wi': 'Отдельный legacy WI' };
+        'story-spine': 'Подготовка L″', 'legacy-wi': 'Отдельный legacy WI', 'wi-review': 'Проверка последнего DIFF' };
     const states = { sending: 'отправляется', complete: 'ответ получен', error: 'ошибка/остановлен' };
     select.replaceChildren(...view.requests.map(request => new Option(
         `${new Date(request.startedAt).toLocaleTimeString()} · ${labels[request.stage] || request.stage} · ${states[request.status]}`, request.id)));
@@ -1123,6 +1235,9 @@ async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
     renderWIProblem(memory);
     renderCoverage();
+    document.getElementById('wm_diff_status').textContent = diffStatus(memory);
+    document.getElementById('wm_review_diff').hidden = !s.wiDiffs && !memory?.wiDiffState?.pending;
+    document.getElementById('wm_retry_diff_review').hidden = !memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied';
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
     const embedded = character?.data?.extensions?.worldMemoryBackup;
@@ -1251,7 +1366,8 @@ async function downloadWIDiagnostics() {
         const record = memory.archive.records[packet.id], outcome = memory.wiPackets?.[packet.id];
         return { packetId: packet.id, order: packet.order, sourceStatus: packet.sourceStatus, stale: packet.stale,
             annotationStatus: record.annotationStatus || null, annotationError: record.annotationError || null,
-            savedWI: Boolean(record.memoryMetadata?.wi), currentWI: Boolean(packet.memoryMetadata?.wi),
+            savedWI: hasSavedWI(record), currentWI: hasSavedWI(packet),
+            wiDiff: record.memoryMetadata?.wiDiff || null,
             updates: record.memoryMetadata?.wi?.updates?.map(update => ({ uid: update.uid, name: update.name, type: update.type })) || [],
             wiStatus: record.memoryMetadata?.wiStatus || null, wiContext: record.memoryMetadata?.wiContext || null,
             writeOutcome: outcome ? structuredClone(outcome) : null };
@@ -1259,7 +1375,7 @@ async function downloadWIDiagnostics() {
     const failures = Object.values(memory.archive?.records || {}).filter(record => !record.deleted
         && (record.annotationResponse || record.annotationError)).map(record => ({ packetId: record.id,
         annotationStatus: record.annotationStatus, error: record.annotationError || record.annotationResponse?.error, response: record.annotationResponse || null }));
-    const requests = archiveRuntime.inspectPrompts().requests.filter(request => request.stage === 'metadata' || request.stage === 'legacy-wi');
+    const requests = archiveRuntime.inspectPrompts().requests.filter(request => ['metadata', 'legacy-wi', 'wi-review'].includes(request.stage));
     const byId = new Map(Object.values(memory.archive?.responses || {}).map(response => [response.id, response]));
     for (const request of requests) if (!byId.has(request.id)) byId.set(request.id, request);
     for (const failure of failures) if (typeof failure.response?.text === 'string') {
@@ -1275,13 +1391,109 @@ async function downloadWIDiagnostics() {
         selectedBook: chatWorldInfo(context), destinationBook: memory.book, coverage: wiCoverage(memory),
         runtime: { enabled: Boolean(settings().enabled), autoApply: Boolean(settings().auto),
             archiveBusy: archiveRuntime.isBusy(), wiBusy: busy },
-        lastWIWrite: memory.lastWIWrite || null, packets, failures, requests });
+        lastWIWrite: memory.lastWIWrite || null, wiDiffState: memory.wiDiffState || null, wiDiffReview: memory.wiDiffReview || null, packets, failures, requests });
     status(responseCount
         ? `В диагностике ${responseCount} полных/частичных текстов ответа: responses → responseText. Они сохраняются после перезагрузки. Файл содержит текст игры; поля API-подключения не включены.`
         : rawResponseBodyCount ? `Текст модели не извлечён, но в файле есть ${rawResponseBodyCount} сырых HTTP/stream ответов: responses → rawResponseBody.`
             : 'В файле 0 текстов ответа модели — только сведения об ошибках/запросах. Новых полученных ответов в этом чате ещё нет; утраченные старой версией ответы восстановить нельзя.');
 }
 let supportExporting = false;
+let supportImporting = false;
+async function importEverything(file) {
+    if (supportImporting || supportExporting || busy || archiveRuntime.isBusy()) throw new Error('Дождитесь текущей операции с памятью.');
+    supportImporting = true; busy = true; restoringCardGame = true;
+    controller = new AbortController();
+    const signal = controller.signal, initial = ctx();
+    clearTimeout(timer); clearTimeout(cardRestoreTimer); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy();
+    const check = () => {
+        signal.throwIfAborted();
+        if (ctx().chatMetadata !== initial.chatMetadata || ctx().chatId !== initial.chatId)
+            throw new Error('Чат изменился во время импорта. Уже созданные копии сохранены отдельно.');
+    };
+    let prepared, importedAvatar;
+    try {
+        const native = await import('/script.js');
+        status('Импорт всего: чтение файла и подготовка отдельной копии…');
+        const bundle = JSON.parse(await file.text()); check();
+        await native.getCharacters(); await nativeWI.updateWorldInfoList(); check();
+        prepared = prepareSupportImport(bundle, { characterNames: ctx().characters.map(card => card.name),
+            avatarNames: ctx().characters.map(card => card.avatar), bookNames: nativeWI.world_names });
+        if (prepared.backup) {
+            const packed = await packCardBackup(prepared.backup); check();
+            prepared.card.data.extensions.worldMemoryBackup = packed;
+            prepared.card.extensions.worldMemoryBackup = packed;
+        }
+        let upload = new Blob([JSON.stringify(prepared.card)], { type: 'application/json' }), format = 'json';
+        if (bundle.cover?.dataUrl) {
+            if (!bundle.cover.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Обложка в экспорте должна быть PNG.');
+            const cover = await fetch(bundle.cover.dataUrl); check();
+            upload = portablePng(await cover.arrayBuffer(), prepared.card); format = 'png'; check();
+        }
+        for (const [name, book] of Object.entries(prepared.books)) {
+            check();
+            if (!await nativeWI.createNewWorldInfo(name, { interactive: false })) throw new Error(`Не удалось создать отдельную WI-книгу: ${name}`);
+            await writeNativeBook(name, book, check);
+        }
+        status(`Импорт всего: создание ${prepared.name}…`);
+        const form = new FormData();
+        form.append('avatar', new File([upload], `WorldMemory.${format}`, { type: upload.type })); form.append('file_type', format);
+        const response = await fetch('/api/characters/import', { method: 'POST', headers: initial.getRequestHeaders({ omitContentType: true }), body: form });
+        if (!response.ok) throw new Error(`Не удалось импортировать карточку (HTTP ${response.status}).`);
+        const result = await response.json(); check();
+        if (!result.file_name || result.error) throw new Error('ST не создал карточку.');
+        importedAvatar = result.file_name.endsWith('.png') ? result.file_name : `${result.file_name}.png`;
+        // portablePng removes installation bindings. Restore only this new card's
+        // mapped extensions, never a previously selected character's form.
+        let stored = await readCharacterCard(importedAvatar); check();
+        // Native import sanitizes both the filename and display name. Preserve
+        // the author's display name independently of the new file on disk.
+        if (stored.data.name !== prepared.name) {
+            const renamed = await fetch('/api/characters/edit-attribute', { method: 'POST', headers: initial.getRequestHeaders(),
+                body: JSON.stringify({ avatar_url: importedAvatar, ch_name: stored.data.name, field: 'name', value: prepared.name }) });
+            if (!renamed.ok) throw new Error(`Не удалось сохранить имя копии (HTTP ${renamed.status}).`);
+            stored = await readCharacterCard(importedAvatar); check();
+        }
+        await writeCardExtensions(importedAvatar, stored, prepared.card.data.extensions); check();
+        const json = async (url, data) => {
+            const response = await fetch(url, { method: 'POST', headers: initial.getRequestHeaders(), body: JSON.stringify(data) });
+            if (!response.ok) throw new Error(`Импорт чата: HTTP ${response.status}.`);
+            return response.json();
+        };
+        await json('/api/chats/get', { avatar_url: importedAvatar }); check();
+        prepared.metadata.worldMemoryCardImport = { avatar: importedAvatar, importedAt: Date.now(), format: bundle.format };
+        const header = { user_name: bundle.chat.playerName || initial.name1, character_name: prepared.name,
+            create_date: new Date().toISOString(), chat_metadata: prepared.metadata };
+        const saved = await json('/api/chats/save', { avatar_url: importedAvatar, file_name: prepared.chatId,
+            chat: [header, ...prepared.messages] }); check();
+        if (!saved.ok) throw new Error('ST не подтвердил сохранение полного чата.');
+        const received = await json('/api/chats/get', { avatar_url: importedAvatar, file_name: prepared.chatId }); check();
+        if (!Array.isArray(received) || JSON.stringify(received) !== JSON.stringify([header, ...prepared.messages]))
+            throw new Error('Сохранённый чат не совпал с импортом. Копии оставлены для восстановления.');
+        if (prepared.extraBooks.length) {
+            nativeWI.world_info.charLore ??= [];
+            nativeWI.world_info.charLore.push({ name: importedAvatar.replace(/\.png$/i, ''), extraBooks: prepared.extraBooks });
+            initial.saveSettingsDebounced();
+        }
+        // Selection emits CHAT_CHANGED, which cancels the old chat's controller.
+        // All writes are complete before opening the independently saved game.
+        controller = null;
+        await native.getCharacters();
+        const id = ctx().characters.findIndex(card => card.avatar === importedAvatar);
+        if (id < 0) throw new Error('Копия сохранена, но ST не обновил список карточек. Перезагрузите страницу.');
+        await ctx().selectCharacterById(id);
+        await ctx().openCharacterChat(prepared.chatId);
+        if (ctx().chatId !== prepared.chatId || ctx().characters[ctx().characterId]?.avatar !== importedAvatar)
+            throw new Error('Копия сохранена; откройте её чат в списке карточек.');
+        history.changed(); semanticWI.invalidate();
+        status(`Импортировано: ${prepared.name}; сообщений ${prepared.messages.length}, WI-книг ${Object.keys(prepared.books).length}. Чат и вся сохранённая память готовы к продолжению.`);
+    } catch (error) {
+        if (importedAvatar) error.message += ` Отдельная карточка: ${prepared.name}.`;
+        throw error;
+    } finally {
+        clearTimeout(timer); controller = null; busy = false; restoringCardGame = false; supportImporting = false;
+        renderBusy(); await render(); await renderArchive();
+    }
+}
 async function exportEverything() {
     if (supportExporting) return;
     const context = ctx(), metadata = context.chatMetadata;
@@ -1300,6 +1512,11 @@ async function exportEverything() {
             chat: metadata.world_info || null, persona: context.powerUserSettings?.persona_description_lorebook || null,
             extra: (nativeWI.world_info?.charLore || []).filter(row => row.name === avatar || row.name === avatar?.replace(/\.png$/i, ''))
                 .flatMap(row => row.extraBooks || []) } };
+        // Export the books this imported chat actually uses, including copies of
+        // globally selected originals that are suppressed in its native scan.
+        const importedBooks = metadata.worldMemoryImport?.books || {};
+        for (const [key, value] of Object.entries(worldInfo.bindings)) worldInfo.bindings[key] = Array.isArray(value)
+            ? value.map(name => importedBooks[name] || name) : importedBooks[value] || value;
         for (const key of ['world_info_depth', 'world_info_budget', 'world_info_budget_cap', 'world_info_recursive',
             'world_info_match_whole_words', 'world_info_case_sensitive', 'world_info_character_strategy', 'world_info_max_recursion_steps'])
             worldInfo[key] = nativeWI[key];
@@ -1768,6 +1985,8 @@ async function init() {
         prepareReferences: prepareSummaryContext, prepareKnowledge: options => knowledgeRuntime?.context(options),
         refreshInjection: () => history?.refresh(), onBusyChange: renderBusy, onRequest: renderSummaryPrompts,
         afterSave: async () => { history?.changed(); await update(false); await renderArchive(); } });
+    wiDiffRuntime = createWIDiffRuntime({ ctx, snapshot: options => archiveRuntime.snapshot(options),
+        getBook, saveBook, initializeEntry, saveState });
     history = installHistory({ ctx, settings, state, saveState, status, bridge });
     semanticWI = createSemanticWIRuntime({ ctx, settings, embeddings: history.embeddings,
         sourceQueries: getSummaryWorldInfoSources, sourceSignal: getSummaryWorldInfoSignal, onUpdate: renderWIStatus });
@@ -1861,9 +2080,17 @@ async function init() {
         status('Stage 1 now uses the displayed built-in WorldMemory prompts. Stage 2 was not changed.');
     });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
+    $('#wm_review_diff').on('click', () => { void reviewLastWIDiff(); });
+    $('#wm_retry_diff_review').on('click', () => { void reviewLastWIDiff({ savedOnly: true }); });
     $('#wm_reparse_response').on('click', () => { void backfillMetadata({ force: true, savedResponsesOnly: true }); });
     $('#wm_wi_diagnostics').on('click', () => { void downloadWIDiagnostics().catch(error => status(error.message)); });
     $('#wm_export_all').on('click', () => { void exportEverything().catch(error => status(error.message)); });
+    $('#wm_import_all').on('click', () => document.getElementById('wm_import_all_file').click());
+    $('#wm_import_all_file').on('change', async event => {
+        try { if (event.target.files[0]) await importEverything(event.target.files[0]); }
+        catch (error) { status(error.message); toastr.warning(error.message, 'WorldMemory · импорт всего'); }
+        finally { event.target.value = ''; }
+    });
     $('#wm_backfill_metadata').on('click', () => {
         const repeat = document.getElementById('wm_repeat_metadata'), force = repeat.checked;
         repeat.checked = false;
@@ -1944,12 +2171,14 @@ async function init() {
     } catch (error) { cardRestoreError(error); }
     globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
         archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow, inspectSummaryPrompts: () => archiveRuntime.inspectPrompts(),
-        backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true),
+        backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true), reviewLastWIDiff, reviewWIDiff: reviewLastWIDiff,
+        retrySavedDiffReview: () => reviewLastWIDiff({ savedOnly: true }), inspectWIDiff: () => structuredClone(state()?.wiDiffState || null),
         prepareHistory: prepareContext, inspectHistory: () => history.inspect(), inspectSemanticWI: () => semanticWI.inspect(),
         inspectKnowledge: () => knowledgeRuntime.inspect(), inspectContextBudget: () => lastContextStatistics ? structuredClone(lastContextStatistics) : null,
         getStatus: () => ({ busy, book: state()?.book || null, enabled: settings().enabled,
             history: Boolean(settings().enabled && settings().injectionPosition !== -1),
             summaryWI: Boolean(settings().enabled && settings().auto),
+            wiDiffs: Boolean(settings().wiDiffs), wiDiffPending: state()?.wiDiffState?.pending?.id || null,
             summaryMetadata: Boolean(settings().enabled && (settings().history || settings().auto)),
             wiPending: Object.values(state()?.wiPackets || {}).filter(item => item.status !== 'applied').length }) });
 }

@@ -119,7 +119,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         guard(owner);
         const selected = { ...config() };
         const stage = options.stage || 'legacy-wi';
-        if (stage === 'metadata' || stage === 'legacy-wi') selected.summarizerStreaming = selected.wiStreaming === true;
+        if (stage === 'metadata' || stage === 'legacy-wi' || stage === 'wi-review') selected.summarizerStreaming = selected.wiStreaming === true;
         if (Number(options.responseTokens) > 0) for (const key of ['summarizerResponseLength', 'openaiMaxTokens', 'ollamaMaxTokens']) selected[key] = Number(options.responseTokens);
         const trace = { id: crypto.randomUUID(), stage, streaming: Boolean(selected.summarizerStreaming), startedAt: Date.now(),
             status: 'sending', systemPrompt, userPrompt: prompt, connection: selected.connectionSource || 'default',
@@ -249,6 +249,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             guard(owner); return value;
         } catch (error) {
             guard(owner); warn(`WI references unavailable: ${error.message}. L0 can still be saved.`);
+            if (config().wiDiffs && chatWorldInfo(ctx())) throw error;
             return { failed: true };
         }
     }
@@ -363,6 +364,10 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 delete parsed.metadata.wi;
                 parsed.warning = [parsed.warning, `WI schema: ${error.message}`].filter(Boolean).join(' ');
             }
+            if (wi?.stamp?.diff && parsed.metadata?.wi) {
+                delete parsed.metadata.wi;
+                parsed.warning = [parsed.warning, 'WI diff was requested; an unreviewed legacy replacement was not applied.'].filter(Boolean).join(' ');
+            }
             const trace = requestTrace.findLast(item => item.metadata === owner.metadata && item.trace.stage === 'metadata'
                 && (item.trace.processedResponseText === response.text || item.trace.responseText === response.text))?.trace;
             if (trace) {
@@ -391,23 +396,25 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                     && (parsed.epistemic.length === 0 || boundaries.epistemic?.length) && !boundaries.warnings.length),
                 sourceFingerprints,
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
-                ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
+                ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wiDiff ? 'proposed' : parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
             const previous = record.memoryMetadata;
             if (previous?.textRevision === metadata.textRevision
                 && JSON.stringify(previous.sourceFingerprints) === JSON.stringify(sourceFingerprints)) {
                 if (!parsed.fields?.lprime) metadata.lprime = previous.lprime;
                 if (!parsed.fields?.facts) metadata.facts = previous.facts;
-                if (wi && !metadata.wi && previous.wi && previous.wiContext?.owner === wi.stamp?.owner
+                if (wi && !metadata.wi && !metadata.wiDiff && previous.wi && previous.wiContext?.diff === wi.stamp?.diff && previous.wiContext?.owner === wi.stamp?.owner
                     && previous.wiContext?.book === wi.stamp?.book && previous.wiContext?.authorBook === wi.stamp?.authorBook) {
                     metadata.wi = previous.wi; metadata.wiContext = previous.wiContext; metadata.wiStatus = 'preserved';
                 }
             }
             if (!sources.length || !wi?.context || (wi.stamp?.authorBook !== undefined && wi.stamp.authorBook !== chatWorldInfo(ctx()))) {
-                delete metadata.wi;
+                delete metadata.wi; delete metadata.wiDiff;
                 if (wi) metadata.wiStatus = 'blocked';
             }
             if (boundaries.warnings.length || awareness.warnings.length) warn([...boundaries.warnings, ...awareness.warnings].join(' '));
-            const complete = !parsed.warning && Boolean(metadata.lprime?.text && (!wi || metadata.wi));
+            if (metadata.wiDiff && previous?.wi) metadata.previousWI = previous.wi;
+            else if (previous?.previousWI) metadata.previousWI = previous.previousWI;
+            const complete = !parsed.warning && Boolean(metadata.lprime?.text && (!wi || metadata.wi || metadata.wiDiff));
             putPacket(owner.archive, { ...record, memoryMetadata: metadata, annotationStatus: complete ? 'complete' : 'partial',
                 annotationError: parsed.warning || (complete ? null : 'Some optional metadata is missing; retry stage 2 only.'),
                 annotationResponse: complete && !boundaries.warnings.length && !awareness.warnings.length ? null
@@ -517,16 +524,19 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const pending = snapshot({ effective: false }).packets.filter(packet =>
                 (!selected || selected.includes(packet.id)) && (!options.savedResponsesOnly || packet.annotationResponse)
                 && (options.force || packet.annotationStatus === 'pending' || !packet.memoryMetadata?.lprime?.text
+                || (config().wiDiffs && ctx().chatMetadata.worldMemory?.wiPackets?.[packet.id]?.status === 'rejected')
                 || (hasKnowledgeCharacters && !packet.stale && packet.sourceStatus === 'linked'
                     && !packet.memoryMetadata?.awarenessPrepared)
                 || packet.memoryMetadata.factMode !== 'verbatim-excerpts-v1'
                 || (packet.memoryMetadata.sourceStatus === 'summary-only' && !packet.stale && packet.sourceStatus === 'linked')
                 || (options.includeWI !== false && config().auto !== false && prepareReferences && !packet.stale
-                    && packet.sourceStatus === 'linked' && !packet.memoryMetadata.wi)))
+                    && packet.sourceStatus === 'linked' && !packet.memoryMetadata.wi && !packet.memoryMetadata.wiDiff)))
                 // A rejected optional quote does not make already usable WI
                 // missing. Fill unprepared history before optional repairs;
                 // rebuilding complete/partial results is an explicit action.
-                .sort((a, b) => Number(Boolean(a.memoryMetadata?.wi)) - Number(Boolean(b.memoryMetadata?.wi)));
+                .sort((a, b) => Number(Boolean(a.memoryMetadata?.wi || a.memoryMetadata?.wiDiff))
+                    - Number(Boolean(b.memoryMetadata?.wi || b.memoryMetadata?.wiDiff))
+                    || a.turnRange[0] - b.turnRange[0]);
             const result = { saved: 0, summaryOnly: 0, warnings: 0, failed: 0, total: pending.length };
             for (const packet of pending) {
                 guard(owner);

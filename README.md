@@ -1,5 +1,11 @@
 # WorldMemory for SillyTavern
 
+**One-file game handoff:** **Экспорт всего** saves a complete private support bundle. **Импорт всего** creates a separate character, related lorebooks and complete chat/memory from that file. Copies share the next free suffix, such as `Import_(1)`; original games and API connection settings are preserved. Use this to exchange and improve complete game setups without replacing the installed original.
+
+**ST crashes while loading a large game PNG?** See [startup recovery](tools/PNG_RECOVERY_RU.md). The standalone repair replaces the dependency's memory-heavy PNG text decoder; it keeps cards and chats unchanged. Updating a browser extension alone cannot repair a crash before the browser loads.
+
+**Optional WI diffs:** enable **WI через DIFF** below the chat's destination book. Stage 2 proposes addressed additions/removals. The next block reviews that proposal before publishing it and proposes its own changes. Until then, inference uses confirmed WI alongside the available history and recent chat. **Проверить последнее предложение** makes one explicit review call; its saved answer can be reapplied without another call. Rejection preserves the previous WI and leaves that block needing preparation. Original messages/L0 and retired claims remain stored; manual/foreign entries are protected. This mode is experimental and off by default: a second model pass can still reject bad proposals and does not guarantee complete extraction. Historical backfill cannot silently use a confirmed state from later original messages; it stops when a separate prefix state is required.
+
 [Русский — полная инструкция](README_RU.md) · [Detailed reference](docs/REFERENCE.md) · [Changes](CHANGELOG.md)
 
 > **Not cache-friendly:** WorldMemory rebuilds the retrieved history sent for inference on each turn. This can reduce reuse of your API provider's prompt/input-token cache, although unchanged parts of the request may still benefit from caching.

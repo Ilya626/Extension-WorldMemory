@@ -54,7 +54,7 @@ export function parseModelJson(value) {
 /** Salvage only complete, individually valid top-level metadata sections. */
 export function recoverMetadataSections(value) {
     const text = modelJsonBody(value), result = Object.create(null), seen = new Set();
-    const allowed = new Set(['wi', 'lprime', 'facts', 'awareness', 'epistemic']);
+    const allowed = new Set(['wi', 'wiDiff', 'lprime', 'facts', 'awareness', 'epistemic']);
     if (text[0] !== '{') return result;
     const rootEnd = valueEnd(text, 0);
     if (rootEnd > 0 && !/^[}\]\s]*$/.test(text.slice(rootEnd))) return result;

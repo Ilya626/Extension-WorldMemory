@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.22 — 2026-11-05 — optional reviewed WI diffs
+
+- Import a complete support bundle into a separately named `Import_(n)` character, lorebooks and chat/memory, with independent bindings and preserved original games/API settings.
+
+- Add opt-in source-bound WI proposals with addressed claim additions/retirements, delayed review, an explicit last-proposal review, and saved-result retry without another model call.
+- Preserve originals, L0, retired claims and manual/foreign entries. Reject stale bases/source revisions and later-prefix leakage; allow re-preparing a rejected last packet when confirmed facts still come only from earlier originals.
+- Show proposed/applied/rejected states and effective DIFF instructions. Keep legacy receipt signatures compatible. Semantic extraction remains experimental; automatic historical branch reconstruction is not claimed.
+- Provide a standalone, reversible ST PNG decoder repair for large-card startup OOM. Card and chat files are unchanged.
+
 ## 0.5.10 — 2026-11-01 — duplicate imported character profiles
 
 - Reuse a linked lorebook when its complete native entries match the embedded chat lore. Keep inherited activation settings distinct from explicit overrides during persistent comparison.

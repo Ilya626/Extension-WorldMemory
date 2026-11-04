@@ -13,7 +13,7 @@ Keep lprime brief: a few short scene labels in chronological order, separated by
 Cover each supplied source that contains a meaningful action, choice, dialogue, belief, relationship cue or new detail with at least one useful excerpt. Several distinct details in one source may need separate excerpts. A purely empty confirmation or request to continue may be omitted. Do not select only the largest plot events: concrete terms, conditions, small gestures, tone and unresolved obligations can matter later.
 For facts.text copy a short continuous passage exactly, including punctuation and enough context to preserve its speaker, condition and meaning. Never paraphrase, join distant passages or insert ellipses. Each excerpt cites exactly one supplied handle. Keep separate excerpts when different sources or different moments matter. Do not repeat the same excerpt.
 Use two or three concise, specific keys to make each excerpt searchable by actor, subject and intent. Keys identify what this source is about; they do not settle uncertain consent, motives, diagnoses, possession, promises, deadlines or plans. Distinguish a signal from an opponent's reaction, a proposal from its acceptance, thought from speech and a narrated fact from a character's inference. If a compact label would distort that distinction, omit the label and keep the exact excerpt.
-Use only the supplied source handles, never invented IDs or offsets. Lprime and keys follow the requested memory language; exact excerpts keep their original language. If a WI context is supplied, return its separately requested wi.updates in the same block, preserving the history/reference distinction. No prose outside the block.`;
+Use only the supplied source handles, never invented IDs or offsets. Lprime and keys follow the requested memory language; exact excerpts keep their original language. If a WI context is supplied, follow its separately requested WI schema in the same block, preserving the history/reference distinction. No prose outside the block.`;
 
 /** Handles are local to this one request. Models never assign durable source IDs. */
 export const metadataSources = sources => sources.map((source, index) => ({
@@ -73,10 +73,12 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     const validThread = typeof thread?.text === 'string' && thread.text.trim() && strings(thread.keys);
     const validFacts = Array.isArray(data.facts);
     const validWI = data.wi && typeof data.wi === 'object' && !Array.isArray(data.wi) && Array.isArray(data.wi.updates);
-    result.fields = { lprime: Boolean(validThread), facts: validFacts, wi: Boolean(validWI) };
+    const validDiff = data.wiDiff?.version === 1 && Array.isArray(data.wiDiff.add) && Array.isArray(data.wiDiff.remove);
+    result.fields = { lprime: Boolean(validThread), facts: validFacts, wi: Boolean(validWI || validDiff) };
     if (!validThread || !validFacts) result.warning ||= 'Search navigation fields were incomplete; valid WI and other complete sections were kept.';
     if (data.wi !== undefined && !validWI) result.warning ||= 'WI schema: expected an object with updates array; valid navigation was kept.';
-    if (!validThread && !validFacts && !validWI) return result;
+    if (data.wiDiff !== undefined && !validDiff) result.warning ||= 'WI diff schema: expected version 1, add[] and remove[].';
+    if (!validThread && !validFacts && !validWI && !validDiff) return result;
     const handles = new Map(sources.map(source => [source.handle, source.id]));
     const sourceByHandle = new Map(sources.map(source => [source.handle, source]));
     const facts = [];
@@ -120,6 +122,6 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     result.metadata = { version: 1, textRevision: backfill ? null : memoryTextRevision(prose),
         ...(extractiveFacts ? { factMode: 'verbatim-excerpts-v1' } : {}),
         lprime: validThread ? { text: thread.text.trim(), keys: [...new Set(thread.keys)] } : null, facts,
-        ...(validWI ? { wi: data.wi } : {}) };
+        ...(validWI ? { wi: data.wi } : {}), ...(validDiff ? { wiDiff: data.wiDiff } : {}) };
     return result;
 }
