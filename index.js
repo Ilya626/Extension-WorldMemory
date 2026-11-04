@@ -1086,6 +1086,16 @@ function download(name, data) {
 async function downloadWIDiagnostics() {
     const context = ctx(), memory = state();
     if (!context.chatId || !memory) { status('Откройте чат для диагностики WI.'); return; }
+    const snapshot = archiveRuntime.snapshot({ effective: false });
+    const packets = snapshot.packets.map(packet => {
+        const record = memory.archive.records[packet.id], outcome = memory.wiPackets?.[packet.id];
+        return { packetId: packet.id, order: packet.order, sourceStatus: packet.sourceStatus, stale: packet.stale,
+            annotationStatus: record.annotationStatus || null, annotationError: record.annotationError || null,
+            savedWI: Boolean(record.memoryMetadata?.wi), currentWI: Boolean(packet.memoryMetadata?.wi),
+            updates: record.memoryMetadata?.wi?.updates?.map(update => ({ uid: update.uid, name: update.name, type: update.type })) || [],
+            wiStatus: record.memoryMetadata?.wiStatus || null, wiContext: record.memoryMetadata?.wiContext || null,
+            writeOutcome: outcome ? structuredClone(outcome) : null };
+    });
     const failures = Object.values(memory.archive?.records || {}).filter(record => !record.deleted
         && (record.annotationResponse || record.annotationError)).map(record => ({ packetId: record.id,
         annotationStatus: record.annotationStatus, error: record.annotationError || record.annotationResponse?.error, response: record.annotationResponse || null }));
@@ -1102,7 +1112,10 @@ async function downloadWIDiagnostics() {
     const rawResponseBodyCount = responses.filter(response => typeof response.rawResponseBody === 'string' && response.rawResponseBody.length > 0).length;
     download(`WorldMemory-WI-diagnostics-${Date.now()}.json`, { format: 'world-memory-wi-diagnostics-v1',
         version: VERSION, createdAt: new Date().toISOString(), responseCount, rawResponseBodyCount, responses,
-        selectedBook: chatWorldInfo(context), destinationBook: memory.book, coverage: wiCoverage(memory), failures, requests });
+        selectedBook: chatWorldInfo(context), destinationBook: memory.book, coverage: wiCoverage(memory),
+        runtime: { enabled: Boolean(settings().enabled), autoApply: Boolean(settings().auto),
+            archiveBusy: archiveRuntime.isBusy(), wiBusy: busy },
+        lastWIWrite: memory.lastWIWrite || null, packets, failures, requests });
     status(responseCount
         ? `В диагностике ${responseCount} полных/частичных текстов ответа: responses → responseText. Они сохраняются после перезагрузки. Файл содержит текст игры; поля API-подключения не включены.`
         : rawResponseBodyCount ? `Текст модели не извлечён, но в файле есть ${rawResponseBodyCount} сырых HTTP/stream ответов: responses → rawResponseBody.`
