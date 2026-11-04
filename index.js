@@ -17,7 +17,7 @@ import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudg
     chatWorldInfo, requireChatWorldInfo } from './vendor/summaryception/world-info-context.js';
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
-import { portableBackup, portableCard, portablePng } from './card-transfer.js';
+import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
 
 const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
@@ -50,10 +50,13 @@ function wiCoverage(memory) {
 }
 function renderWIProblem(memory = state()) {
     const output = document.getElementById('wm_wi_problem'); if (!output) return;
-    const failures = Object.values(memory?.archive?.records || {}).filter(record => !record.deleted
-        && record.annotationResponse && (record.annotationError || record.annotationResponse.error));
-    output.hidden = !failures.length;
-    output.textContent = failures.length ? `Требуют проверки: ${failures.length} ответ(ов). ${failures[0].annotationError || failures[0].annotationResponse.error} Целые секции сохранены. Кнопки диагностики и повторного разбора — сразу ниже.` : '';
+    const records = Object.values(memory?.archive?.records || {}).filter(record => !record.deleted);
+    const missing = records.filter(record => !Array.isArray(record.memoryMetadata?.wi?.updates)).length;
+    const failures = records.filter(record =>
+        record.annotationResponse && (record.annotationError || record.annotationResponse.error));
+    output.hidden = !failures.length && !missing;
+    output.textContent = [missing ? `Без подготовленного WI: ${missing} блок(ов) истории. «Подготовить недостающее» вызывает модель; «Повторить разбор» и «Apply saved WI» только используют уже полученные ответы.` : '',
+        failures.length ? `Замечания к подготовке: ${failures.length}. ${failures[0].annotationError || failures[0].annotationResponse.error} Целые секции сохранены; результат записи WI указан отдельно.` : ''].filter(Boolean).join('\n');
 }
 const status = text => {
     const node = document.getElementById('wm_status');
@@ -970,7 +973,9 @@ async function render() {
     const embedded = character?.data?.extensions?.worldMemoryBackup;
     const embeddedGame = embedded?.chat;
     document.getElementById('wm_card_resume_panel').hidden = !character || Boolean(ctx().groupId);
-    document.getElementById('wm_card_resume_status').textContent = embedded?.format === 'world-memory-v1'
+    document.getElementById('wm_card_resume_status').textContent = embedded?.format === 'world-memory-gzip-v1'
+        ? `В карточке: ${embedded.messages} сообщений · память: ${embedded.packets} L0. В открытом чате: ${ctx().chat.length} сообщений.`
+        : embedded?.format === 'world-memory-v1'
         && embeddedGame?.format === 'world-memory-chat-v1' && Array.isArray(embeddedGame.messages)
         ? `В карточке: ${embeddedGame.messages.length} сообщений · память: ${Object.keys(embedded.state?.archive?.records || {}).length} L0. В открытом чате: ${ctx().chat.length} сообщений.`
         : 'В этой карточке нет встроенного чата WorldMemory. Нужен исходный PNG-файл с полной игрой.';
@@ -1194,16 +1199,9 @@ async function saveMemoryToCard() {
             throw new Error('Chat or character changed. Card memory was not updated.');
     };
     try {
-        const backup = await exportBackup(), card = await readCharacterCard(avatar); check();
-        const chatMetadata = structuredClone(context.chatMetadata); delete chatMetadata[OWNER];
-        backup.chat = { format: 'world-memory-chat-v1', messages: structuredClone(context.chat), metadata: chatMetadata };
-        if (chatMetadata.world_info) {
-            const chatLore = await nativeWI.loadWorldInfo(chatMetadata.world_info); check();
-            if (chatLore?.entries) backup.chat.worldInfo = { name: chatMetadata.world_info, data: structuredClone(chatLore) };
-        }
+        const savedBackup = await prepareCardBackup(context, check), card = await readCharacterCard(avatar); check();
         // Replace this snapshot exactly; a deep merge would retain removed archive records.
         // Read fresh extensions first so native WI bindings and unrelated addons survive.
-        const savedBackup = portableBackup(backup);
         const extensions = { ...card.data.extensions, worldMemoryBackup: savedBackup };
         const written = await writeCardExtensions(avatar, card, extensions); check();
         if (JSON.stringify(written.data.extensions?.worldMemoryBackup) !== JSON.stringify(savedBackup))
@@ -1211,13 +1209,26 @@ async function saveMemoryToCard() {
         status('Complete game saved in the character card: chat, memory, outline and WI. Export it as PNG in ST.');
     } finally { controller = null; busy = false; renderBusy(); }
 }
+async function prepareCardBackup(context, check) {
+    const backup = await exportBackup(); check();
+    const chatMetadata = structuredClone(context.chatMetadata); delete chatMetadata[OWNER];
+    backup.chat = { format: 'world-memory-chat-v1', messages: structuredClone(context.chat), metadata: chatMetadata };
+    if (chatMetadata.world_info) {
+        const chatLore = await nativeWI.loadWorldInfo(chatMetadata.world_info); check();
+        if (chatLore?.entries) backup.chat.worldInfo = { name: chatMetadata.world_info, data: structuredClone(chatLore) };
+    }
+    const packed = await packCardBackup(backup); check();
+    return packed;
+}
 async function loadMemoryFromCard() {
     if (busy || archiveRuntime.isBusy() || !state()) return;
     const context = ctx(), metadata = context.chatMetadata, avatar = selectedCardAvatar();
     const card = await readCharacterCard(avatar);
     if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || selectedCardAvatar() !== avatar)
         throw new Error('Chat or character changed. Card memory was not imported.');
-    const backup = card.data.extensions?.worldMemoryBackup;
+    const backup = await unpackCardBackup(card.data.extensions?.worldMemoryBackup);
+    if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || selectedCardAvatar() !== avatar)
+        throw new Error('Chat or character changed. Card memory was not imported.');
     if (!backup) throw new Error('This card has no WorldMemory snapshot. Use Save memory to card first.');
     await importBackup(backup);
 }
@@ -1348,7 +1359,6 @@ async function restoreCardGame(explicit = false) {
             throw new Error('Chat changed. No embedded game was imported.');
         backup = card.data?.extensions?.worldMemoryBackup;
     }
-    const game = backup?.chat;
     // ST expands identity macros while rendering the first greeting. Compare
     // them without evaluating state-changing or random macros a second time.
     const greeting = character.first_mes || '';
@@ -1357,6 +1367,10 @@ async function restoreCardGame(explicit = false) {
     const fresh = context.chat.length === 0 || (context.chat.length === 1 && !context.chat[0].is_user
         && (context.chat[0].mes === greeting || context.chat[0].mes === renderedGreeting));
     if (!explicit && (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport)) return false;
+    backup = await unpackCardBackup(backup);
+    if (ctx().chatMetadata !== context.chatMetadata || ctx().characters[ctx().characterId]?.avatar !== character.avatar)
+        throw new Error('Chat changed. No embedded game was imported.');
+    const game = backup?.chat;
     if (backup?.format !== 'world-memory-v1' || game?.format !== 'world-memory-chat-v1'
         || !Array.isArray(game.messages) || !game.messages.length) {
         if (explicit) throw new Error('This card has no embedded game chat. Import the original PNG as a file, not a compressed photo.');
@@ -1462,28 +1476,52 @@ function interceptNativeCardExport(event) {
     event.preventDefault(); event.stopImmediatePropagation();
     const avatar = selectedCardAvatar(), format = target.dataset.format;
     void (async () => {
-        // Preserve native save-before-export behavior, but bind its form to the
-        // receiving character before allowing ST to submit it.
+        if (busy || archiveRuntime.isBusy()) throw new Error('Wait for the current memory operation before exporting the game.');
+        // ST's PNG metadata decoder builds a string one character at a time.
+        // Assemble the complete download in the browser: a full game must never
+        // pass through native character edit/export on a phone's server heap.
         if (document.getElementById('avatar_url_pole')?.value !== avatar)
             await ctx().selectCharacterById(ctx().characterId);
         if (selectedCardAvatar() !== avatar || document.getElementById('avatar_url_pole')?.value !== avatar)
             throw new Error('Character editor changed before card export.');
-        const { createOrEditCharacter } = await import('/script.js');
-        await createOrEditCharacter();
-        if (selectedCardAvatar() !== avatar) throw new Error('Character changed before card export.');
-        await saveMemoryToCard();
-        if (selectedCardAvatar() !== avatar) throw new Error('Character changed before card export.');
-        // Avoid the native click handler's second full-form character save: its
-        // avatar field can still belong to a previous selection on mobile.
-        const response = await fetch('/api/characters/export', { method: 'POST', headers: ctx().getRequestHeaders(),
-            body: JSON.stringify({ avatar_url: avatar, format }) });
-        if (!response.ok) throw new Error(`Could not export character (HTTP ${response.status}).`);
-        const blob = format === 'png' ? portablePng(await response.arrayBuffer())
-            : new Blob([JSON.stringify(portableCard(await response.json()), null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob), link = document.createElement('a');
-        link.href = url; link.download = avatar.replace(/\.png$/i, `.${format}`); link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        $('#export_format_popup').hide();
+        if (busy || archiveRuntime.isBusy()) throw new Error('Wait for the current memory operation before exporting the game.');
+        const context = ctx(), metadata = context.chatMetadata, character = context.characters[context.characterId];
+        busy = true; controller = new AbortController(); clearTimeout(timer); renderBusy();
+        const check = () => {
+            controller.signal.throwIfAborted();
+            if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat || selectedCardAvatar() !== avatar)
+                throw new Error('Chat or character changed before card export.');
+        };
+        try {
+            const card = portableCard(character.json_data ? JSON.parse(character.json_data) : character);
+            const form = new FormData(document.getElementById('form_create'));
+            for (const [field, native] of Object.entries({ name: 'ch_name', description: 'description', personality: 'personality',
+                scenario: 'scenario', first_mes: 'first_mes', mes_example: 'mes_example', creator_notes: 'creator_notes',
+                system_prompt: 'system_prompt', post_history_instructions: 'post_history_instructions', creator: 'creator', character_version: 'character_version' })) {
+                if (!form.has(native)) continue;
+                card.data[field] = String(form.get(native));
+                if (['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'].includes(field)) card[field] = card.data[field];
+            }
+            card.data.alternate_greetings = structuredClone(character.data.alternate_greetings || []);
+            if (form.has('tags')) card.tags = card.data.tags = String(form.get('tags')).split(',').map(tag => tag.trim()).filter(Boolean);
+            card.fav = false; card.data.extensions ??= {}; card.data.extensions.fav = false;
+            card.data.extensions.worldMemoryBackup = await prepareCardBackup(context, check);
+            // Old ST cards can have a second top-level extensions object.
+            // Carry one snapshot only; data.extensions is the canonical V2/V3 path.
+            if (card.extensions) delete card.extensions.worldMemoryBackup;
+            let blob;
+            if (format === 'png') {
+                const response = await fetch(`/characters/${encodeURIComponent(avatar)}`, { cache: 'no-store' }); check();
+                if (!response.ok) throw new Error(`Could not read the character cover (HTTP ${response.status}).`);
+                blob = portablePng(await response.arrayBuffer(), card); check();
+            } else blob = new Blob([JSON.stringify(card, null, 2)], { type: 'application/json' });
+            check();
+            const url = URL.createObjectURL(blob), link = document.createElement('a');
+            link.href = url; link.download = avatar.replace(/\.png$/i, `.${format}`); link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            $('#export_format_popup').hide();
+            status('Complete game exported: chat, memory, outline and WI.');
+        } finally { controller = null; busy = false; renderBusy(); }
     })().catch(error => {
         status(error.message); toastr.warning(error.message, 'World Memory');
     });

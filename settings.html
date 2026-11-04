@@ -34,6 +34,8 @@
       <small class="wm-muted">Резюмирование / Regenerate / Refine блока L0: 2 запроса на пакет — сначала L0 + L″ и сохранение, затем L′ / поиск / WI. Это отдельные фоновые вызовы, не игровой RP-ответ. Ошибка второго этапа не удаляет L0. Инструкции и последние запросы видны в Summarizer connection → Instructions.</small>
       <div id="wm_status" class="wm-status" role="status" aria-live="polite">Loading…</div>
       <div id="wm_wi_problem" class="wm-status" role="status" aria-live="polite" hidden></div>
+      <div class="wm-actions"><button id="wm_backfill_metadata" class="menu_button" type="button">Подготовить недостающее · поиск / WI</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
+      <small class="wm-muted">Запрашивает второй этап для сохранённых L0 без готового поиска / WI. Готовые записи не перегенерируются из-за отдельных неточных цитат. Повтор всего архива — отдельная галочка в L0 archive.</small>
       <div class="wm-actions"><button id="wm_wi_diagnostics" class="menu_button" type="button">Скачать диагностику WI</button><button id="wm_reparse_response" class="menu_button" type="button">Повторить разбор · 0 запросов</button></div>
       <small class="wm-muted">При ошибке ответ модели сохраняется. Эти кнопки скачивают ответ с причиной ошибки или повторяют его разбор без обращения к модели.</small>
       <div id="wm_history_status" class="wm-muted" role="status" aria-live="polite"></div>
@@ -125,7 +127,6 @@
         <div id="wm_archive" class="wm-archive"></div>
         <button id="wm_backfill_spine" class="menu_button" type="button">Prepare missing story skeleton</button>
         <small class="wm-muted">New L0 replies include their skeleton in the same response. Old records need one preparation request each; L0 text is kept. Until prepared, their full saved account is used and may exceed the soft target. Manual text remains authoritative.</small>
-        <div class="wm-actions"><button id="wm_backfill_metadata" class="menu_button" type="button">Prepare search / WI · stage 2 only</button><label class="checkbox_label"><input id="wm_wi_stream" data-setting="wiStreaming" type="checkbox"><span>Streaming</span></label></div>
         <label class="checkbox_label"><input id="wm_repeat_metadata" type="checkbox"><span>Повторить уже готовые блоки — новые вызовы модели</span></label>
         <div class="wm-field"><label for="wm_response_tokens">Лимит ответа поиск / WI (0 = из подключения)</label><input id="wm_response_tokens" data-setting="responseTokens" class="text_pole" type="number" min="0" step="512"></div>
         <button id="wm_open_wi_result" class="menu_button" type="button">Открыть WI с результатом</button>

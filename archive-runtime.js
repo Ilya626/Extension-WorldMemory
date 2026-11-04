@@ -516,14 +516,17 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             const selected = options.packetIds || (options.packetId ? [options.packetId] : null);
             const pending = snapshot({ effective: false }).packets.filter(packet =>
                 (!selected || selected.includes(packet.id)) && (!options.savedResponsesOnly || packet.annotationResponse)
-                && (options.force || packet.annotationStatus === 'pending'
-                || packet.annotationStatus === 'partial' || packet.annotationError || !packet.memoryMetadata?.lprime?.text
+                && (options.force || packet.annotationStatus === 'pending' || !packet.memoryMetadata?.lprime?.text
                 || (hasKnowledgeCharacters && !packet.stale && packet.sourceStatus === 'linked'
                     && !packet.memoryMetadata?.awarenessPrepared)
                 || packet.memoryMetadata.factMode !== 'verbatim-excerpts-v1'
                 || (packet.memoryMetadata.sourceStatus === 'summary-only' && !packet.stale && packet.sourceStatus === 'linked')
                 || (options.includeWI !== false && config().auto !== false && prepareReferences && !packet.stale
-                    && packet.sourceStatus === 'linked' && !packet.memoryMetadata.wi)));
+                    && packet.sourceStatus === 'linked' && !packet.memoryMetadata.wi)))
+                // A rejected optional quote does not make already usable WI
+                // missing. Fill unprepared history before optional repairs;
+                // rebuilding complete/partial results is an explicit action.
+                .sort((a, b) => Number(Boolean(a.memoryMetadata?.wi)) - Number(Boolean(b.memoryMetadata?.wi)));
             const result = { saved: 0, summaryOnly: 0, warnings: 0, failed: 0, total: pending.length };
             for (const packet of pending) {
                 guard(owner);

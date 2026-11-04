@@ -21,6 +21,10 @@ Since 0.5.18, `archive.responses` additionally persists received text for every 
 
 Since 0.5.19, diagnostics also export per-packet `writeOutcome`, saved/current WI validity, update subjects, source status and binding, plus `lastWIWrite` and the enabled/auto-apply/busy flags. A preparation warning is separate from the book-write result: rejected optional search excerpts do not themselves reject complete WI. Downloading these states makes no model request and performs no book write.
 
+Since 0.5.20, ordinary stage-2 preparation fills missing required navigation/WI before optional repairs. A partial warning alone does not resubmit otherwise usable data; explicit force/rebuild and saved-response replay remain available. Complete results are not regenerated merely because a quoted search excerpt failed exact matching.
+
+Card transport uses `world-memory-gzip-v1` in `data.extensions.worldMemoryBackup`; its gzip/base64 payload contains the full portable backup. Browser PNG/JSON export prepares the current game without server character edit/export requests, keeps cover chunks unchanged and does not persist editor changes to the server card. Import accepts both packed and legacy plain backups. The compact format requires an updated receiving extension. Explicit Save memory to card still uses the native card writer.
+
 **Summarizer connection → Advanced summary prompts** lets you edit migrated or custom L0 instructions. Blank fields use the built-in prompts. In the user template, `{{story_txt}}` is the new source packet, `{{context_str}}` is the complete previous L0, and `{{player_name}}` is the player name. These settings do not change the separate search-note / WI format.
 
 Example: a workshop keeper lends a visitor a key until morning. L0 preserves the conversation, event order and time condition. WI describes the keeper, workshop and relevant relationships as reusable entity reference. A promise, attempt and completed action remain different facts.

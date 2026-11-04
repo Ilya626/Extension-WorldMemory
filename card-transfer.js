@@ -10,6 +10,23 @@ export function portableBackup(input) {
     return backup;
 }
 
+// Keep the full game, but do not make ST's PNG parser expand megabytes of
+// repeated source/response text into per-character strings on a phone.
+export async function packCardBackup(input) {
+    const backup = portableBackup(input);
+    const stream = new Blob([JSON.stringify(backup)]).stream().pipeThrough(new CompressionStream('gzip'));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    return { format: 'world-memory-gzip-v1', data: base64(bytes),
+        messages: backup.chat?.messages?.length || 0,
+        packets: Object.keys(backup.state?.archive?.records || {}).length };
+}
+export async function unpackCardBackup(input) {
+    if (input?.format !== 'world-memory-gzip-v1') return input;
+    const bytes = Uint8Array.from(atob(input.data), character => character.charCodeAt(0));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+}
+
 export function portableCard(input) {
     const card = structuredClone(input);
     for (const key of ['avatar', 'chat', 'json_data', 'date_added', 'date_last_chat', 'chat_size', 'data_size']) delete card[key];
@@ -26,11 +43,14 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
     for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
     return value >>> 0;
 });
-function textBytes(text) {
-    const bytes = encoder.encode(text), parts = [];
+function base64(bytes) {
+    const parts = [];
     for (let start = 0; start < bytes.length; start += 32768)
         parts.push(String.fromCharCode(...bytes.subarray(start, start + 32768)));
-    return encoder.encode(btoa(parts.join('')));
+    return btoa(parts.join(''));
+}
+function textBytes(text) {
+    return encoder.encode(base64(encoder.encode(text)));
 }
 function textChunk(keyword, card) {
     const value = textBytes(JSON.stringify(card)), label = encoder.encode(keyword);
@@ -44,7 +64,7 @@ function textChunk(keyword, card) {
 }
 
 // Replace card text chunks only. Raster, cover and all other PNG chunks stay byte exact.
-export function portablePng(buffer) {
+export function portablePng(buffer, card = null) {
     const bytes = new Uint8Array(buffer), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const parts = [bytes.subarray(0, 8)];
     let found = false;
@@ -57,10 +77,17 @@ export function portablePng(buffer) {
             const data = bytes.subarray(offset + 8, end - 4), separator = data.indexOf(0);
             const key = decoder.decode(data.subarray(0, separator));
             if (['chara', 'ccv3'].includes(key.toLowerCase())) {
+                if (card) { offset = end; continue; }
                 const binary = atob(decoder.decode(data.subarray(separator + 1)));
-                const card = JSON.parse(decoder.decode(Uint8Array.from(binary, character => character.charCodeAt(0))));
-                replacement = textChunk(key, portableCard(card)); found = true;
+                const stored = JSON.parse(decoder.decode(Uint8Array.from(binary, character => character.charCodeAt(0))));
+                replacement = textChunk(key, portableCard(stored)); found = true;
             }
+        }
+        if (type === 'IEND' && card) {
+            const saved = portableCard(card);
+            parts.push(textChunk('chara', { ...saved, spec: 'chara_card_v2', spec_version: '2.0' }),
+                textChunk('ccv3', { ...saved, spec: 'chara_card_v3', spec_version: '3.0' }));
+            found = true;
         }
         parts.push(replacement || bytes.subarray(offset, end)); offset = end;
     }
