@@ -1,5 +1,9 @@
 import { OWNER, TYPES, compactRevision, fingerprint, packetSignature } from './memory.js';
 
+// A saved journal determines this chat's write protocol even on another
+// installation whose global opt-in setting is off. Never mutate that setting.
+export const usesWIDiffs = (settings = {}, memory = null) => Boolean(settings.wiDiffs || memory?.wiDiffState);
+
 // Pure WI state only. Raw messages, L0, native books and their manual entries are never changed here.
 const clone = value => structuredClone(value);
 const fail = message => { throw new Error(`WI diff: ${message}`); };

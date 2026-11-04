@@ -23,6 +23,62 @@ function rebind(value, books, oldOwner, owner, oldChat, chatId) {
     }
 }
 
+function rebindCharacterFilters(value, originals, avatar) {
+    if (!value || typeof value !== 'object') return;
+    const target = avatar.replace(/\.png$/i, '');
+    for (const [key, item] of Object.entries(value)) {
+        if (['characterFilter', 'character_filter'].includes(key) && Array.isArray(item?.names))
+            item.names = item.names.map(name => originals.has(name) ? target : name);
+        else rebindCharacterFilters(item, originals, avatar);
+    }
+}
+
+/** A full-game restore may have a new chat ID, while still containing every
+ * original. Memory-only imports with missing/changed sources stay conservative. */
+export function rebindCompleteBackup(backup, { owner, chatId, bookName, messages, avatar, characterNames = [], authorBook = '' }) {
+    const saved = backup.state, archive = saved?.archive;
+    if (!archive?.records || !backup.book?.entries || !Array.isArray(messages)) return null;
+    const idOf = message => message.sc_message_id || message.extra?.sc_message_id || message.id;
+    const originals = new Map(Object.entries(archive.sources || {}).map(([id, source]) => [idOf(source) || id, source]));
+    for (const source of backup.chat?.messages || []) if (idOf(source)) originals.set(idOf(source), source);
+    const required = new Set(Object.values(archive.records).flatMap(record => record.sourceMessageIds || []));
+    for (const claim of saved.wiDiffState?.confirmed?.claims || [])
+        for (const id of [...Object.keys(claim.sources || {}), ...Object.keys(claim.retired?.sources || {})]) required.add(id);
+    for (const id of Object.keys(saved.wiDiffState?.pending?.sources || {})) required.add(id);
+    if (backup.chat?.messages) for (const source of backup.chat.messages) if (idOf(source)) required.add(idOf(source));
+    if (!required.size) return null;
+    const receiving = new Map();
+    for (const message of messages) if (idOf(message)) {
+        const id = idOf(message); if (receiving.has(id)) return null;
+        receiving.set(id, message);
+    }
+    for (const id of required) {
+        const original = originals.get(id), current = receiving.get(id);
+        if (!original || !current || (original.mes ?? original.text) !== (current.mes ?? current.text)
+            || Boolean(original.is_user ?? original.isUser) !== Boolean(current.is_user ?? current.isUser)
+            || original.name !== current.name) return null;
+    }
+    const names = new Map([[saved.book, bookName]].filter(([name]) => name));
+    if (saved.wiSourceBook && saved.wiSourceBook !== saved.book && authorBook) names.set(saved.wiSourceBook, authorBook);
+    const state = copy(saved), book = copy(backup.book);
+    rebind(book, names, saved.owner, owner, saved.chatId, chatId);
+    if (book.name === saved.book) book.name = bookName;
+    const sourceCharacter = backup.chat?.character || {};
+    const originalCharacters = new Set([...characterNames, sourceCharacter.name, sourceCharacter.avatar,
+        sourceCharacter.avatar?.replace(/\.png$/i, '')].filter(Boolean));
+    if (avatar) rebindCharacterFilters(book, originalCharacters, avatar);
+    if (saved.book) rebindKnowledgeIdentities(state.archive,
+        { book: backup.book, world: saved.book, owner: saved.owner }, { book, world: bookName, owner });
+    rebind(state, names, saved.owner, owner, saved.chatId, chatId);
+    state.owner = owner; state.chatId = chatId; state.book = bookName;
+    const previous = new Map(archiveSnapshot(archive, { chat: backup.chat?.messages || messages }, { effective: false }).packets.map(packet => [packet.id, packet]));
+    for (const packet of archiveSnapshot(state.archive, { chat: messages }, { effective: false }).packets) {
+        const receipt = state.wiPackets?.[packet.id], before = previous.get(packet.id);
+        if (receipt && before && receipt.revision === attemptRevision(before)) receipt.revision = attemptRevision(packet);
+    }
+    return { state, book, bindings: Object.fromEntries(names) };
+}
+
 /** Prepare a separate character and chat. This function has no native writes or
  * settings side effects; every required section is checked before publication. */
 export function prepareSupportImport(bundle, { characterNames = [], avatarNames = [], bookNames = [],
@@ -61,14 +117,7 @@ export function prepareSupportImport(bundle, { characterNames = [], avatarNames 
     const suffix = `Import_(${number})`, name = `${cardBase} ${suffix}`, fileName = `${fileBase} ${suffix}`;
     const originalAvatar = bundle.card.avatar || bundle.card.native?.avatar;
     const originalCharacters = new Set([originalName, originalAvatar, originalAvatar?.replace(/\.png$/i, '')].filter(Boolean));
-    const rebindFilters = value => {
-        if (!value || typeof value !== 'object') return;
-        for (const [key, item] of Object.entries(value)) {
-            if (['characterFilter', 'character_filter'].includes(key) && Array.isArray(item?.names))
-                item.names = item.names.map(previous => originalCharacters.has(previous) ? fileName : previous);
-            else rebindFilters(item);
-        }
-    };
+    const rebindFilters = value => rebindCharacterFilters(value, originalCharacters, fileName);
     const names = new Map([...bookBases].map(([old, base]) => [old, `${base} ${suffix}`]));
     const books = Object.fromEntries([...names].map(([old, next]) => [next, copy(bundle.books[old])]));
     const state = saved ? copy(saved) : null, metadata = copy(bundle.chat.metadata), messages = copy(bundle.chat.messages);

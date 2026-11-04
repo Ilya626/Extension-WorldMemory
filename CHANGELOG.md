@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.23 — 2026-11-05 — preserve imported WI mode
+
+- A chat with a saved DIFF journal keeps that mode independently of the installation's global toggle. Do not mix legacy WI replacements into a restored journal.
+- Display the effective chat mode in controls, status and instruction previews. Keep global settings/API connections unchanged.
+- Restore complete embedded PNG games with their WI journal, sidecars and source bindings; rebind the copied game to its new character and books.
+- Recognize a fresh greeting after ST expands its macros, without re-running random or state-changing macros during detection.
+
 ## 0.5.22 — 2026-11-05 — optional reviewed WI diffs
 
 - Import a complete support bundle into a separately named `Import_(n)` character, lorebooks and chat/memory, with independent bindings and preserved original games/API settings.

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareSupportImport } from '../support-import.js';
+import { prepareSupportImport, rebindCompleteBackup } from '../support-import.js';
 import { archiveSnapshot, sourceFingerprint } from '../archive-store.js';
 import { compactRevision, packetSignature } from '../memory.js';
 import { buildKnowledgeContext } from '../knowledge-runtime.js';
 import { memoryTextRevision } from '../vendor/summaryception/memory-metadata.js';
+import { usesWIDiffs } from '../wi-diff.js';
 
 function exported() {
     const message = { sc_message_id: 'source-1', name: 'Player', is_user: true, mes: 'Original message.' };
@@ -53,11 +54,30 @@ test('complete import preserves chat/archive/diffs and remaps its independent na
     assert.deepEqual(memory.wiDiffState.pending, bundle.backup.state.wiDiffState.pending);
     assert.deepEqual(memory.wiDiffState.confirmed, bundle.backup.state.wiDiffState.confirmed);
     assert.equal(memory.wiDiffState.branch, 'new-owner');
+    const receivingSettings = { wiDiffs: false, connectionProfileId: 'local-profile' };
+    assert.equal(usesWIDiffs(receivingSettings, memory), true);
+    assert.deepEqual(receivingSettings, { wiDiffs: false, connectionProfileId: 'local-profile' });
     const packet = archiveSnapshot(memory.archive, { chat: result.messages }, { effective: false }).packets[0];
     assert.equal(memory.wiPackets['packet-1'].status, 'applied');
     assert.equal(memory.wiPackets['packet-1'].revision, compactRevision([packetSignature(packet), packet.memoryMetadata.wi, packet.memoryMetadata.wiContext]));
     assert.deepEqual(result.metadata.worldMemoryImport.settings, bundle.settings);
     assert.deepEqual(result.metadata.worldMemoryImport.inspections, bundle.inspections);
+    const wholeBackup = { ...bundle.backup, chat: { messages: bundle.chat.messages,
+        character: { name: bundle.card.stored.data.name, avatar: 'Character.png' } } };
+    const native = rebindCompleteBackup(wholeBackup, { owner: 'native-owner', chatId: 'native-chat',
+        bookName: 'Native book', messages: bundle.chat.messages, avatar: 'Character2.png', characterNames: ['Character'] });
+    assert.ok(native);
+    assert.equal(native.state.owner, 'native-owner'); assert.equal(native.state.chatId, 'native-chat');
+    assert.equal(native.state.wiDiffState.book, 'Native book'); assert.equal(native.state.wiDiffState.branch, 'native-owner');
+    assert.deepEqual(native.state.wiDiffState.pending, bundle.backup.state.wiDiffState.pending);
+    assert.deepEqual(native.state.history, bundle.backup.state.history);
+    assert.equal(native.book.entries[0].extensions.worldMemory.owner, 'native-owner');
+    assert.notEqual(native.book.entries[0].extensions.worldMemory.manual, true);
+    assert.deepEqual(native.book.entries[0].extensions.worldMemory.contributions, bundle.backup.book.entries[0].extensions.worldMemory.contributions);
+    assert.deepEqual(native.book.entries[0].characterFilter.names, ['Character2', 'Unrelated']);
+    const nativePacket = archiveSnapshot(native.state.archive, { chat: bundle.chat.messages }, { effective: false }).packets[0];
+    assert.equal(native.state.wiPackets['packet-1'].revision,
+        compactRevision([packetSignature(nativePacket), nativePacket.memoryMetadata.wi, nativePacket.memoryMetadata.wiContext]));
 });
 
 test('repeated import selects one free suffix for character and every book without changing originals', () => {

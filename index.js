@@ -19,8 +19,9 @@ import { populateProfileDropdown } from './vendor/summaryception/connectionutil.
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
 import { collectSupportBundle } from './support-export.js';
-import { prepareSupportImport } from './support-import.js';
+import { prepareSupportImport, rebindCompleteBackup } from './support-import.js';
 import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
+import { usesWIDiffs } from './wi-diff.js';
 import { parseModelJson } from './model-json.js';
 
 const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
@@ -48,11 +49,12 @@ const hasSavedWI = packet => Boolean(packet.memoryMetadata?.wiDiff || Array.isAr
 const wiAttemptRevision = packet => compactRevision(packet.memoryMetadata?.wiDiff
     ? [packetSignature(packet), packet.memoryMetadata.wiDiff, packet.memoryMetadata.wiContext || null]
     : [packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+const diffMode = (memory = state()) => usesWIDiffs(settings(), memory);
 function diffStatus(memory = state()) {
     const diff = memory?.wiDiffState;
-    if (!diff) return settings().wiDiffs ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
+    if (!diff) return diffMode(memory) ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
     const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
-    return `DIFF: подтверждено тезисов ${count}.${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : ' Непроверенных предложений нет.'}`;
+    return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : ' Непроверенных предложений нет.'}`;
 }
 function wiCoverage(memory) {
     const packets = Object.values(memory?.archive?.records || {}).filter(packet => !packet.deleted);
@@ -459,7 +461,7 @@ function orderFor(entry, packets) {
 }
 async function prepareSummaryContext({ sourceIds = [], existingSummary = null, signal } = {}) {
     if (!settings().enabled || !settings().auto || !bridge()?.snapshot) return null;
-    if (settings().wiDiffs) {
+    if (diffMode()) {
         signal?.throwIfAborted();
         await update(false); signal?.throwIfAborted();
         const packet = bridge().snapshot({ effective: false }).packets.find(packet => packet.text === existingSummary
@@ -566,6 +568,7 @@ function clearUnprovenEntry(next, entry, keep = false) {
     else delete next.entries[entry.uid];
 }
 async function applyPacket(packet, book, packets, metadata, savedWI = false) {
+    if (diffMode()) throw new Error('Этот чат использует WI-DIFF; legacy-запись отключена. Подготовьте DIFF для нужного блока.');
     let { updates, included } = savedWI ? summaryRequest(packet, book) : await requestPacket(packet, book, metadata);
     unchanged(metadata);
     const current = bridge().snapshot().packets.find(item => item.id === packet.id);
@@ -688,14 +691,14 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
     let snapshot = bridge().snapshot();
     const metadata = snapshot.metadata;
     if (!snapshot.chatId) { status('Open a character chat first.'); return; }
-    if (force && settings().wiDiffs) { status('В режиме DIFF используйте подготовку поиска / WI. Последнее предложение проверяется отдельной кнопкой; legacy refresh не применяется к DIFF.'); return; }
+    if (force && diffMode()) { status('В режиме DIFF используйте подготовку поиска / WI. Последнее предложение проверяется отдельной кнопкой; legacy refresh не применяется к DIFF.'); return; }
     busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = cleanupOnly ? null : requireChatWorldInfo(ctx());
         let book = await getBook(!cleanupOnly);
         if (!book) return;
         snapshot = bridge().snapshot();
-        const diffManaged = settings().wiDiffs || Boolean(state().wiDiffState);
+        const diffManaged = diffMode();
         if (!cleanupOnly && !diffManaged) {
             const beforeNames = structuredClone(book); syncMainNames(book);
             book = await saveBook(book, metadata, beforeNames);
@@ -738,6 +741,14 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                     await saveState(); throw error;
                 }
                 await saveState(); continue;
+            }
+            if (diffManaged) {
+                if (packet.memoryMetadata?.wiContext?.diff) state().wiPackets[packet.id] = {
+                    revision, status: 'error', mode: 'diff', message: packet.annotationError
+                        || 'DIFF не разобран. L0 и прежний WI сохранены. Повторите подготовку этого блока или разбор сохранённого ответа.' };
+                else if (state().wiPackets[packet.id]?.revision !== revision) state().wiPackets[packet.id] = {
+                    revision, status: 'pending', mode: 'diff', message: 'Сохранённый legacy WI не записывается поверх журнала DIFF. Подготовьте DIFF для этого блока.' };
+                continue;
             }
             const saved = Boolean(packet.memoryMetadata?.wi);
             if (!saved && !force) {
@@ -878,8 +889,8 @@ function renderBusy() {
     $('#wm_stop').prop('disabled', !working);
     $('#wm_coverage_prepare, #wm_coverage_apply, #wm_coverage_spine, .wm-coverage-mutation').prop('disabled', working);
     $('#wm_export_all, #wm_import_all').prop('disabled', working);
-    $('#wm_wi_diffs').prop('disabled', working);
-    $('#wm_update').prop('disabled', working || settings().wiDiffs);
+    $('#wm_wi_diffs').prop('checked', diffMode()).prop('disabled', working || Boolean(state()?.wiDiffState));
+    $('#wm_update').prop('disabled', working || diffMode());
     $('#wm_review_diff').prop('disabled', working || !state()?.wiDiffState?.pending);
     $('#wm_retry_diff_review').prop('disabled', working || !state()?.wiDiffReview?.responseText || state()?.wiDiffReview?.status === 'applied');
     $('#wm_coverage_stop').prop('hidden', !working);
@@ -1204,7 +1215,7 @@ function renderHistoryPlacement(s = settings()) {
 }
 function renderSummaryPrompts() {
     if (!archiveRuntime?.inspectPrompts || !document.getElementById('wm_prompt_preview')) return;
-    const s = settings(), view = archiveRuntime.inspectPrompts({ wiSystemPrompt: s.auto ? (s.wiDiffs ? DIFF_SYSTEM : SUMMARY_WI_SYSTEM) : null,
+    const s = settings(), view = archiveRuntime.inspectPrompts({ wiSystemPrompt: s.auto ? (diffMode() ? DIFF_SYSTEM : SUMMARY_WI_SYSTEM) : null,
         knowledgeActive: Boolean(s.knowledgeBoundaries) });
     for (const [id, key, effective] of [['wm_summary_system_prompt', 'summarizerSystemPrompt', view.baseSystem],
         ['wm_summary_user_prompt', 'summarizerUserPrompt', view.userTemplate]]) {
@@ -1236,7 +1247,7 @@ async function render() {
     renderWIProblem(memory);
     renderCoverage();
     document.getElementById('wm_diff_status').textContent = diffStatus(memory);
-    document.getElementById('wm_review_diff').hidden = !s.wiDiffs && !memory?.wiDiffState?.pending;
+    document.getElementById('wm_review_diff').hidden = !diffMode(memory) && !memory?.wiDiffState?.pending;
     document.getElementById('wm_retry_diff_review').hidden = !memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied';
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
@@ -1292,7 +1303,7 @@ async function render() {
     }
     for (const control of document.querySelectorAll('.world-memory-settings [data-setting]')) {
         if (document.activeElement === control) continue;
-        if (control.type === 'checkbox') control.checked = Boolean(s[control.dataset.setting]);
+        if (control.type === 'checkbox') control.checked = control.dataset.setting === 'wiDiffs' ? diffMode(memory) : Boolean(s[control.dataset.setting]);
         else control.value = s[control.dataset.setting] ?? '';
     }
     renderHistoryPlacement(s);
@@ -1652,7 +1663,9 @@ async function saveMemoryToCard() {
 async function prepareCardBackup(context, check) {
     const backup = await exportBackup(); check();
     const chatMetadata = structuredClone(context.chatMetadata); delete chatMetadata[OWNER];
-    backup.chat = { format: 'world-memory-chat-v1', messages: structuredClone(context.chat), metadata: chatMetadata };
+    const character = context.characters?.[context.characterId];
+    backup.chat = { format: 'world-memory-chat-v1', messages: structuredClone(context.chat), metadata: chatMetadata,
+        character: { name: character?.name, avatar: character?.avatar } };
     if (chatMetadata.world_info) {
         const chatLore = await nativeWI.loadWorldInfo(chatMetadata.world_info); check();
         if (chatLore?.entries) backup.chat.worldInfo = { name: chatMetadata.world_info, data: structuredClone(chatLore) };
@@ -1674,6 +1687,7 @@ async function loadMemoryFromCard() {
 }
 async function importBackup(input) {
         let reserved = false, context, memory, metadata, next, published = false, committed = false;
+        let previousWorldInfo, previousImport, movedBindings = false;
         try {
             if (busy || archiveRuntime.isBusy() || !state()) return;
             context = ctx(); metadata = context.chatMetadata; memory = state();
@@ -1716,27 +1730,33 @@ async function importBackup(input) {
                     for (const record of Object.values(next.archive.records)) record.unavailableSourceIds = record.sourceMessageIds.filter(id => !present.has(id));
                 }
             }
-            const book = data.book?.entries ? structuredClone(data.book) : null;
+            let book = data.book?.entries ? structuredClone(data.book) : null;
             if (book && (!object(book.entries) || Object.values(book.entries).some(entry => !object(entry)
                 || !Number.isInteger(entry.uid) || !Array.isArray(entry.key) || entry.key.some(key => typeof key !== 'string')
                 || typeof entry.comment !== 'string' || typeof entry.content !== 'string'
                 || (entryMeta(entry) && !object(entryMeta(entry)))))) throw new Error('Backup contains an invalid native WI entry.');
+            const character = context.characters?.[context.characterId];
+            const complete = book ? rebindCompleteBackup(data, { owner, chatId: context.chatId,
+                bookName: `WorldMemory_${owner}_import_${crypto.randomUUID()}`, messages: context.chat,
+                avatar: character?.avatar, characterNames: [character?.name, character?.data?.name], authorBook: chatWorldInfo(context) }) : null;
+            if (complete) { next = complete.state; book = complete.book; }
             for (const entry of Object.values(book?.entries || {})) {
                 const meta = entryMeta(entry); if (!meta) continue;
                 if (!object(meta.contributions)) throw new Error('Backup managed WI contributions must be an object.');
+                if (complete) continue;
                 meta.owner = owner;
                 if (foreign) { meta.manual = true; meta.contributions = {}; }
             }
             if (book) {
                 // Publish the imported book with the metadata pointer. Never overwrite
                 // the receiving book: a failed save still leaves the old pair recoverable.
-                next.book = `WorldMemory_${owner}_import_${crypto.randomUUID()}`;
+                if (!complete) next.book = `WorldMemory_${owner}_import_${crypto.randomUUID()}`;
                 delete next.cloneFrom;
                 delete next.cloneOwner;
-                if (data.state?.book && data.state?.owner) rebindKnowledgeIdentities(next.archive,
+                if (!complete && data.state?.book && data.state?.owner) rebindKnowledgeIdentities(next.archive,
                     { book: data.book, world: data.state.book, owner: data.state.owner },
                     { book, world: next.book, owner });
-                if (!foreign && data.state?.archive) for (const record of Object.values(next.archive.records)) {
+                if (!complete && !foreign && data.state?.archive) for (const record of Object.values(next.archive.records)) {
                     const stamp = record.memoryMetadata?.wiContext;
                     if (stamp?.owner === data.state.owner && stamp.book === data.state.book) {
                         stamp.owner = owner; stamp.book = next.book;
@@ -1748,10 +1768,22 @@ async function importBackup(input) {
                 await nativeWI.saveWorldInfo(next.book, book, true); check();
             }
             check();
+            if (complete && data.state.wiSourceBook === data.state.book) {
+                previousWorldInfo = metadata.world_info; previousImport = metadata.worldMemoryImport;
+                const provenance = structuredClone(previousImport || {}), bindings = complete.bindings;
+                provenance.books = Object.fromEntries(Object.entries(provenance.books || {}).map(([old, name]) => [old, bindings[name] || name]));
+                Object.assign(provenance.books, bindings);
+                if (previousWorldInfo && previousWorldInfo !== next.book) provenance.books[previousWorldInfo] = next.book;
+                metadata.world_info = next.book; metadata.worldMemoryImport = provenance; movedBindings = true;
+            }
             metadata[OWNER] = next; published = true;
             check(next);
             await context.saveMetadata();
             committed = true;
+            if (complete && restoringCardGame && metadata.world_info === next.book && character?.avatar) {
+                const card = await readCharacterCard(character.avatar); check(next);
+                await writeCardExtensions(character.avatar, card, { ...card.data.extensions, world: next.book }); check(next);
+            }
             history.changed();
             if (ctx().chatMetadata === metadata) {
                 await render(); await renderArchive();
@@ -1761,6 +1793,10 @@ async function importBackup(input) {
         } catch (error) {
             if (published && !committed && metadata[OWNER] === next) {
                 metadata[OWNER] = memory;
+                if (movedBindings) {
+                    if (previousWorldInfo === undefined) delete metadata.world_info; else metadata.world_info = previousWorldInfo;
+                    if (previousImport === undefined) delete metadata.worldMemoryImport; else metadata.worldMemoryImport = previousImport;
+                }
                 // A native save can fail after reaching the server. Keep the prepared
                 // book for recovery; never delete a possible persisted metadata target.
                 if (ctx().chatMetadata === metadata && ctx().chat === context.chat) {
@@ -1799,13 +1835,17 @@ async function restoreCardGame(explicit = false) {
             throw new Error('Chat changed. No embedded game was imported.');
         backup = card.data?.extensions?.worldMemoryBackup;
     }
-    // ST expands identity macros while rendering the first greeting. Compare
-    // them without evaluating state-changing or random macros a second time.
+    // ST expands greeting macros (including random/empty ones). Compare the
+    // literal portions without evaluating those macros a second time.
     const greeting = character.first_mes || '';
     const renderedGreeting = greeting.replace(/\{\{\s*(user|char)\s*\}\}/gi, (tag, name) =>
         (name.toLowerCase() === 'user' ? context.name1 : context.chat[0]?.name || character.name) ?? tag);
+    const greetingParts = greeting.split(/\{\{[^{}]*\}\}/g);
+    const expandedGreeting = greetingParts.length > 1 && greetingParts.join('').trim().length >= 32
+        && new RegExp('^' + greetingParts.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            .join('[\\s\\S]*?') + '$').test(context.chat[0]?.mes || '');
     const fresh = context.chat.length === 0 || (context.chat.length === 1 && !context.chat[0].is_user
-        && (context.chat[0].mes === greeting || context.chat[0].mes === renderedGreeting));
+        && (context.chat[0].mes === greeting || context.chat[0].mes === renderedGreeting || expandedGreeting));
     if (!explicit && (!fresh || Object.keys(getArchive().records).length || context.chatMetadata.worldMemoryCardImport)) return false;
     backup = await unpackCardBackup(backup);
     if (ctx().chatMetadata !== context.chatMetadata || ctx().characters[ctx().characterId]?.avatar !== character.avatar)
@@ -1981,7 +2021,7 @@ async function init() {
     getArchive();
     if (await claimArchiveRuntime()) return;
     archiveRuntime = installArchiveRuntime({ ctx,
-        settings: () => ({ ...settings(), archiveAuto: !busy && settings().archiveAuto !== false }), getArchive, saveArchive, status,
+        settings: () => ({ ...settings(), wiDiffs: diffMode(), archiveAuto: !busy && settings().archiveAuto !== false }), getArchive, saveArchive, status,
         prepareReferences: prepareSummaryContext, prepareKnowledge: options => knowledgeRuntime?.context(options),
         refreshInjection: () => history?.refresh(), onBusyChange: renderBusy, onRequest: renderSummaryPrompts,
         afterSave: async () => { history?.changed(); await update(false); await renderArchive(); } });
@@ -2038,6 +2078,9 @@ async function init() {
     for (const control of document.querySelectorAll('.world-memory-settings [data-setting]')) {
         if (control.id === 'wm_connection_profile') continue; // native profile lifecycle owns this listener
         control.addEventListener('change', () => {
+            if (control.dataset.setting === 'wiDiffs' && state()?.wiDiffState) {
+                control.checked = true; renderBusy(); status(diffStatus()); return;
+            }
             if (control.id === 'wm_injection_position') {
                 const s = settings(), selected = control.value;
                 if (s.injectionPosition === 1 && s.injectionDepth > 0) s.injectionInsideDepth = s.injectionDepth;
@@ -2178,7 +2221,7 @@ async function init() {
         getStatus: () => ({ busy, book: state()?.book || null, enabled: settings().enabled,
             history: Boolean(settings().enabled && settings().injectionPosition !== -1),
             summaryWI: Boolean(settings().enabled && settings().auto),
-            wiDiffs: Boolean(settings().wiDiffs), wiDiffPending: state()?.wiDiffState?.pending?.id || null,
+            wiDiffs: diffMode(), wiDiffPending: state()?.wiDiffState?.pending?.id || null,
             summaryMetadata: Boolean(settings().enabled && (settings().history || settings().auto)),
             wiPending: Object.values(state()?.wiPackets || {}).filter(item => item.status !== 'applied').length }) });
 }
