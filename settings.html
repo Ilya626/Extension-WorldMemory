@@ -6,6 +6,31 @@
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
       <div class="wm-field"><label for="wm_card_wi">WI этого чата · куда записывать результат</label><select id="wm_card_wi" class="text_pole"></select></div>
       <div id="wm_card_wi_status" class="wm-muted"></div>
+      <div class="wm-actions"><button id="wm_export_all" class="menu_button" type="button">Экспорт всего · один файл</button></div>
+      <small class="wm-muted">Для разбора проблемы: чат с сырым хвостом, карточка и обложка, память/скелет, связанные WI, ответы и диагностика. Содержит текст игры; ключи подключения не включаются.</small>
+      <section class="wm-coverage" aria-labelledby="wm_coverage_heading">
+        <h4 id="wm_coverage_heading">Карта истории</h4>
+        <div id="wm_coverage_summary" class="wm-muted" role="status" aria-live="polite"></div>
+        <div class="wm-coverage-filters" aria-label="Фильтр блоков истории">
+          <button class="menu_button" type="button" data-coverage-filter="all" aria-pressed="true">Все</button>
+          <button class="menu_button" type="button" data-coverage-filter="missing" aria-pressed="false">Без WI</button>
+          <button class="menu_button" type="button" data-coverage-filter="attention" aria-pressed="false">Замечания</button>
+        </div>
+        <div class="wm-coverage-table">
+          <div class="wm-coverage-columns" aria-hidden="true"><span>Сообщения</span><span>L0</span><span>L″</span><span>Поиск</span><span>WI<br>готов</span><span>WI<br>в книге</span></div>
+          <div id="wm_coverage_rows"></div>
+        </div>
+        <p class="wm-muted wm-coverage-help">Нажмите строку: источники, состояние и действия. ✓ готово · — отсутствует · ! требует внимания. WI готов и WI записан — разные состояния.</p>
+        <div id="wm_coverage_next" class="wm-muted"></div>
+        <div class="wm-actions">
+          <button id="wm_coverage_prepare" class="menu_button" type="button">Подготовить недостающий поиск / WI · модель</button>
+          <button id="wm_coverage_apply" class="menu_button" type="button" hidden>Записать готовый WI · 0 запросов</button>
+          <button id="wm_coverage_spine" class="menu_button" type="button" hidden>Подготовить недостающий скелет · модель</button>
+          <button id="wm_coverage_stop" class="menu_button" type="button" hidden>Стоп · сохранённое останется</button>
+        </div>
+        <div id="wm_coverage_working" class="wm-muted" role="status" aria-live="polite" hidden></div>
+        <small class="wm-muted">Здесь — сохранённые блоки и связанные сообщения, не процент токенов и не весь текущий чат. Архив без лимита по токенам; полный скелет остаётся в запросе. Бюджет ниже регулирует подбор подробностей.</small>
+      </section>
       <section id="wm_card_resume_panel" hidden>
         <div id="wm_card_resume_status" class="wm-muted" role="status" aria-live="polite"></div>
         <button id="wm_card_resume" class="menu_button" type="button">Restore game from card · Восстановить игру из карточки</button>

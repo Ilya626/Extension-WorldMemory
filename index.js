@@ -18,6 +18,7 @@ import { installWorldInfoTracking, collectSummaryWorldInfo, summaryWorldInfoBudg
 import { populateProfileDropdown } from './vendor/summaryception/connectionutil.js';
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
+import { collectSupportBundle } from './support-export.js';
 
 const defaults = { enabled: true, auto: true, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
@@ -772,15 +773,163 @@ function renderBusy() {
     $('#wm_update, #wm_retry_saved_wi, #wm_reparse_response, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
+    $('#wm_coverage_prepare, #wm_coverage_apply, #wm_coverage_spine, .wm-coverage-mutation').prop('disabled', working);
+    $('#wm_export_all').prop('disabled', working);
+    $('#wm_coverage_stop').prop('hidden', !working);
+    const activity = document.getElementById('wm_coverage_working');
+    if (activity) {
+        activity.hidden = !working;
+        activity.textContent = working ? `Обработка идёт. Сохранённые слои остаются доступны. ${document.getElementById('wm_status')?.textContent || ''}` : '';
+    }
 }
 function button(text, callback) {
     const node = document.createElement('button'); node.className = 'menu_button'; node.textContent = text;
     node.addEventListener('click', () => Promise.resolve(callback()).catch(error => status(error.message))); return node;
 }
+let coverageFilter = 'all';
+function coverageState(kind, label) { return { kind, label }; }
+function coveragePacket(packet, memory) {
+    const saved = memory.archive?.records?.[packet.id] || {}, meta = packet.memoryMetadata;
+    const linked = packet.sourceStatus === 'linked', stale = packet.stale;
+    const wi = Array.isArray(meta?.wi?.updates), savedWI = Array.isArray(saved.memoryMetadata?.wi?.updates);
+    const stamp = meta?.wiContext;
+    const binding = !stamp || (stamp.version === 1 && stamp.owner === memory.owner && stamp.book === memory.book
+        && (stamp.authorBook === undefined || stamp.authorBook === chatWorldInfo(ctx())));
+    const revision = compactRevision([packetSignature(packet), meta?.wi || null, meta?.wiContext || null]);
+    const receipt = memory.wiPackets?.[packet.id];
+    const applied = !stale && linked && binding && meta?.sourceStatus !== 'summary-only'
+        && receipt?.status === 'applied' && receipt.revision === revision;
+    const annotationWarning = Boolean(packet.annotationError || packet.annotationResponse?.error || packet.annotationStatus === 'partial');
+    const l0 = coverageState(stale ? 'warn' : 'ok', stale ? 'L0 сохранён; исходники изменились' : packet.manual ? 'Сохранённый ручной L0' : 'L0 сохранён');
+    const spine = stale ? coverageState('warn', 'Скелет требует проверки: исходники изменились')
+        : packet.storySpine ? coverageState(packet.storySpine.sourceStatus === 'summary-only' ? 'warn' : 'ok',
+            packet.storySpine.sourceStatus === 'summary-only' ? 'Скелет подготовлен по L0, без исходников' : 'Скелет L″ готов')
+            : coverageState(packet.manual || packet.storySpineError ? 'warn' : 'pending', packet.manual ? 'Используется ручной L0 целиком'
+                : packet.storySpineError || 'Нет L″; используется полный сохранённый L0');
+    const search = stale ? coverageState('warn', 'Поиск требует обновления: исходники изменились')
+        : meta?.lprime?.text ? coverageState(annotationWarning || !linked || meta.sourceStatus === 'summary-only' ? 'warn' : 'ok',
+            !linked || meta.sourceStatus === 'summary-only' ? 'Поиск подготовлен по L0, без исходников'
+                : annotationWarning ? 'Поиск доступен; есть замечание к разметке' : 'Поиск подготовлен')
+            : coverageState(annotationWarning ? 'error' : 'pending', annotationWarning ? 'Поиск не подготовлен; ошибка разметки' : 'Поиск ещё не подготовлен');
+    const prepared = stale ? coverageState('warn', 'WI требует обновления: исходники изменились')
+        : wi ? coverageState(!linked || !binding || meta.sourceStatus === 'summary-only' ? 'warn' : 'ok', !linked ? 'WI сохранён; исходники недоступны'
+            : meta.sourceStatus === 'summary-only' ? 'WI сохранён по L0, без исходного подтверждения'
+            : !binding ? 'WI сохранён для другой привязки книги' : meta.wi.updates.length ? `WI подготовлен: ${meta.wi.updates.length} изменений` : 'Проверено: новых фактов WI нет')
+            : coverageState(!linked || savedWI ? 'warn' : annotationWarning ? 'error' : 'pending', !linked ? 'WI нужны исходники'
+                : savedWI ? 'Сохранённый WI не соответствует текущему L0' : annotationWarning ? 'WI не подготовлен; проверьте ответ' : 'WI ещё не подготовлен');
+    const written = applied ? coverageState('ok', !wi ? 'WI записан через legacy; отдельный результат подготовки не сохранён'
+        : meta.wi.updates.length ? 'Текущий результат WI записан' : 'Пустой результат применён; запись не нужна')
+        : receipt?.status === 'error' ? coverageState('error', `Ошибка записи WI: ${receipt.message || 'причина не сохранена'}`)
+            : stale || receipt?.status === 'stale' || (receipt?.status === 'applied' && !applied)
+                ? coverageState('warn', 'Прежний статус записи WI не подтверждает текущую версию / книгу')
+                : coverageState('pending', wi ? 'WI готов, но текущая запись не подтверждена' : 'WI ещё не записан');
+    const cells = [l0, spine, search, prepared, written];
+    return { packet, cells, linked, applied, wi, missing: prepared.kind !== 'ok',
+        attention: cells.some(cell => cell.kind === 'warn' || cell.kind === 'error'), needsSpine: !stale && !packet.manual && !packet.storySpine };
+}
+function coverageRange(packet) {
+    const indices = (packet.sources || []).map(source => source.index).filter(Number.isFinite).sort((a, b) => a - b);
+    if (indices.length) return `#${indices[0]}–${indices.at(-1)}`;
+    return Array.isArray(packet.turnRange) && packet.turnRange.every(Number.isFinite) ? `#${packet.turnRange[0]}–${packet.turnRange[1]}` : 'Без номеров';
+}
+function coverageSources(packet) {
+    const indices = [...new Set((packet.sources || []).map(source => source.index).filter(Number.isFinite))].sort((a, b) => a - b);
+    const ranges = [];
+    for (let i = 0; i < indices.length; i++) {
+        const start = indices[i]; let end = start;
+        while (indices[i + 1] === end + 1) end = indices[++i];
+        ranges.push(start === end ? `#${start}` : `#${start}–${end}`);
+    }
+    return ranges.join(', ') || 'Номера исходников недоступны';
+}
+function coverageDetails(row, metadata) {
+    const { packet } = row, content = document.createElement('div'); content.className = 'wm-coverage-detail';
+    for (const [index, heading] of ['Резюме L0', 'Скелет L″', 'Поиск', 'WI подготовлен', 'WI в книге'].entries()) {
+        const line = document.createElement('div'), label = document.createElement('span'), value = document.createElement('b');
+        line.className = 'wm-coverage-state'; label.textContent = heading; value.textContent = row.cells[index].label;
+        line.append(label, value); content.append(line);
+    }
+    const source = document.createElement('p'); source.className = 'wm-muted';
+    source.textContent = `Источники: доступны ${packet.sources.length} из ${packet.sourceMessageIds.length}. ${coverageSources(packet)}. ${packet.stale
+        ? 'Состав или текст изменён; сохранённый L0 остаётся в архиве.' : !row.linked ? 'Часть исходников недоступна; подготовка по L0 отмечается отдельно.'
+            : 'Поиск / WI используют связанные исходные сообщения.'} Номера сохранены как в чате, с нуля; интервал может содержать пропуски.`;
+    content.append(source);
+    for (const message of [packet.annotationError, packet.storySpineError]) if (message) {
+        const note = document.createElement('p'); note.className = 'wm-muted'; note.textContent = message; content.append(note);
+    }
+    const actions = document.createElement('div'); actions.className = 'wm-actions';
+    const action = (text, callback, mutation = true) => {
+        const control = button(text, async () => {
+            if (ctx().chatMetadata !== metadata) return;
+            if (mutation && (busy || archiveRuntime.isBusy())) return;
+            try { await callback(); }
+            finally { if (mutation) { history.changed(); await render(); await renderArchive(); } }
+        });
+        if (mutation) control.classList.add('wm-coverage-mutation'); return control;
+    };
+    actions.append(action('Открыть L0 и действия в архиве', async () => {
+        await renderArchive();
+        const target = [...document.querySelectorAll('#wm_archive > details')].find(node => node.dataset.recordId === packet.id);
+        if (!target) return;
+        target.parentElement.closest('details').open = true; target.open = true; target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, false));
+    if (!packet.stale) actions.append(action(!row.linked ? 'Подготовить поиск по L0 · модель'
+        : row.wi ? 'Подготовить поиск / WI заново · модель' : 'Подготовить поиск / WI блока · модель',
+        () => archiveRuntime.backfillMemoryMetadata({ packetId: packet.id, force: row.wi, responseTokens: settings().responseTokens })));
+    if (packet.annotationResponse) actions.append(action('Повторить разбор ответа · 0 запросов',
+        () => archiveRuntime.backfillMemoryMetadata({ packetId: packet.id, force: true, savedResponsesOnly: true, responseTokens: settings().responseTokens })));
+    if (row.wi && !row.applied) actions.append(action('Записать готовые WI · 0 запросов', () => update(false, true)));
+    content.append(actions); return content;
+}
+function renderCoverage(snapshot = archiveRuntime?.snapshot({ effective: false })) {
+    const container = document.getElementById('wm_coverage_rows'); if (!container || !snapshot) return;
+    const memory = state(), rows = snapshot.packets.map(packet => coveragePacket(packet, memory));
+    const sourceIds = new Set(snapshot.packets.flatMap(packet => packet.sources.map(source => source.id)));
+    const missing = rows.filter(row => row.missing).length, attention = rows.filter(row => row.attention).length;
+    const summary = document.getElementById('wm_coverage_summary');
+    summary.textContent = `${rows.length} сохранённых L0 · ${sourceIds.size} связанных исходников. Скелет: ${rows.filter(row => row.packet.storySpine && !row.packet.stale).length}/${rows.length}. WI готов: ${rows.filter(row => row.cells[3].kind === 'ok').length}/${rows.length}; текущий WI в книге: ${rows.filter(row => row.applied).length}/${rows.length}.`;
+    for (const control of document.querySelectorAll('[data-coverage-filter]')) {
+        const name = control.dataset.coverageFilter;
+        control.textContent = name === 'all' ? `Все ${rows.length}` : name === 'missing' ? `Без WI ${missing}` : `Замечания ${attention}`;
+        control.setAttribute('aria-pressed', String(coverageFilter === name));
+    }
+    const opened = new Set([...container.querySelectorAll('details[open]')].map(node => node.dataset.recordId));
+    container.replaceChildren();
+    for (const row of rows.filter(row => coverageFilter === 'all' || (coverageFilter === 'missing' ? row.missing : row.attention))) {
+        const panel = document.createElement('details'), title = document.createElement('summary'), range = document.createElement('span');
+        panel.className = 'wm-coverage-record'; panel.dataset.recordId = row.packet.id; title.className = 'wm-coverage-row';
+        const at = document.createElement('b'), count = document.createElement('small');
+        at.textContent = coverageRange(row.packet); count.textContent = `${row.packet.sourceMessageIds.length} исходников`;
+        range.className = 'wm-coverage-range'; range.append(at, count); title.append(range);
+        title.setAttribute('aria-label', `${at.textContent}. ${row.cells.map(cell => cell.label).join('. ')}`);
+        for (const cell of row.cells) {
+            const mark = document.createElement('span'); mark.className = `wm-coverage-cell wm-coverage-${cell.kind}`;
+            mark.textContent = cell.kind === 'ok' ? '✓' : cell.kind === 'pending' ? '—' : '!'; mark.title = cell.label; mark.setAttribute('aria-hidden', 'true'); title.append(mark);
+        }
+        panel.append(title);
+        const expand = () => { if (panel.open && panel.childElementCount === 1) { panel.append(coverageDetails(row, snapshot.metadata)); renderBusy(); } };
+        panel.addEventListener('toggle', expand); container.append(panel);
+        if (opened.has(row.packet.id)) { panel.open = true; expand(); }
+    }
+    if (!container.childElementCount) {
+        const empty = document.createElement('p'); empty.className = 'wm-muted';
+        empty.textContent = rows.length ? 'Блоков с таким состоянием нет.' : 'Сохранённых L0 пока нет. Сырой хвост чата показан ниже.'; container.append(empty);
+    }
+    const wiEnabled = chatWorldInfo(ctx()) && settings().auto !== false;
+    document.getElementById('wm_coverage_next').textContent = !rows.length ? 'Новые сообщения сначала сохраняются в L0.'
+        : !wiEnabled ? 'Для подготовки WI выберите книгу этого чата и включите Prepare and apply WI. Без этого подготовка сохраняет поиск; архив и скелет остаются доступны.'
+        : missing ? `Без подготовленного WI: ${missing} блок(ов). Замечание к поисковой цитате не отменяет готовый WI. Подготовка использует модель; число вызовов зависит от настроек.`
+        : 'У всех блоков сохранён результат WI, включая успешные пустые результаты. Замечания и запись в текущую книгу показаны отдельно.';
+    document.getElementById('wm_coverage_prepare').hidden = !rows.length;
+    document.getElementById('wm_coverage_apply').hidden = !rows.some(row => row.wi && !row.applied);
+    document.getElementById('wm_coverage_spine').hidden = !rows.some(row => row.needsSpine);
+    renderBusy();
+}
 async function renderArchive() {
     const container = document.getElementById('wm_archive'), label = document.getElementById('wm_archive_status');
     if (!container || !archiveRuntime) return;
     const snapshot = archiveRuntime.snapshot({ effective: false });
+    renderCoverage(snapshot);
     const records = snapshot.packets, stale = records.filter(record => record.stale);
     const incomplete = record => record.annotationStatus === 'pending' || record.annotationStatus === 'partial' || Boolean(record.annotationError);
     label.textContent = `${records.length} saved records · ${stale.length} changed source set(s) · ${records.filter(r => !r.storySpine && !r.manual && !r.stale).length} need a compact story skeleton · ${records.filter(incomplete).length} need search notes / WI. Archive size is independent of the history request target.`;
@@ -788,6 +937,7 @@ async function renderArchive() {
     const metadata = ctx().chatMetadata;
     for (const record of records.slice().reverse()) {
         const panel = document.createElement('details'); panel.className = 'wm-record';
+        panel.dataset.recordId = record.id;
         const title = document.createElement('summary');
         const linked = record.sources || [];
         const at = linked.length ? `messages ${linked[0].index}–${linked.at(-1).index}` : 'originals unavailable';
@@ -797,44 +947,48 @@ async function renderArchive() {
         title.textContent = `${at} · ${record.tokenCount ?? '?'} (${countLabel})${record.manual ? ' · manual' : ''}${record.stale ? ' · SOURCES CHANGED' : ''}${record.storySpine ? ' · skeleton ready' : ' · full saved account'}${incomplete(record) ? ' · search notes / WI incomplete' : ''}`;
         title.title = [countSource, Number.isFinite(record.responseTokenCount)
             ? `Original response: ${record.responseTokenCount} (${record.responseTokenCountSource || 'source unknown'}); may include hidden output.` : ''].filter(Boolean).join('\n');
-        const text = document.createElement('textarea'); text.className = 'text_pole'; text.rows = 7; text.value = record.text;
-        text.setAttribute('aria-label', `Saved memory ${record.id}`);
-        const sourceDetails = document.createElement('details'), sourceTitle = document.createElement('summary'), sourceText = document.createElement('pre');
-        sourceTitle.textContent = `${record.sourceMessageIds.length} exact source links`;
-        sourceText.textContent = record.sourceMessageIds.map(id => {
-            const source = linked.find(item => item.id === id);
-            return source ? `#${source.index} · ${source.name} · ${id}` : `${id} · unavailable`;
-        }).join('\n');
-        sourceDetails.append(sourceTitle, sourceText);
-        const actions = document.createElement('div'); actions.className = 'wm-actions';
-        const action = (name, callback) => button(name, async () => {
-            if (ctx().chatMetadata !== metadata) return;
-            try { await callback(); history.changed(); }
-            finally { await renderArchive(); renderBusy(); }
-        });
-        actions.append(action('Save text', () => archiveRuntime.edit(record.id, text.value)),
-            action('Regenerate · 2 calls', () => archiveRuntime.regenerate(record.id)),
-            action('Refine · 2 calls', () => archiveRuntime.refine(record.id)),
-            action('Rebuild search notes / WI', () => archiveRuntime.backfillMemoryMetadata({ packetId: record.id, force: true })),
-            action('Delete', () => archiveRuntime.remove(record.id)));
-        if (!record.manual && !record.stale) actions.append(action(record.storySpine ? 'Rebuild story skeleton' : 'Prepare story skeleton',
-            () => archiveRuntime.backfillStorySpine({ packetId: record.id, force: true, responseTokens: settings().responseTokens })));
         panel.append(title);
-        if (record.stale) {
-            const warning = document.createElement('p'); warning.className = 'wm-muted';
-            warning.textContent = 'The linked messages were edited or removed. This saved account is retained but excluded from retrieval until refreshed. Regenerate uses its exact remaining source set; missing originals need your review.';
-            panel.append(warning);
-        }
-        if (record.annotationError) {
-            const warning = document.createElement('p'); warning.className = 'wm-muted';
-            warning.textContent = `Saved L0 kept. ${record.annotationError} Use Rebuild search notes / WI to retry this step only.`;
-            panel.append(warning);
-        }
-        if (record.storySpineError) {
-            const warning = document.createElement('p'); warning.className = 'wm-muted';
-            warning.textContent = `Saved L0 kept. ${record.storySpineError}`; panel.append(warning);
-        }
-        panel.append(text, sourceDetails, actions); container.append(panel);
+        panel.addEventListener('toggle', () => {
+            if (!panel.open || panel.childElementCount > 1) return;
+            const text = document.createElement('textarea'); text.className = 'text_pole'; text.rows = 7; text.value = record.text;
+            text.setAttribute('aria-label', `Saved memory ${record.id}`);
+            const sourceDetails = document.createElement('details'), sourceTitle = document.createElement('summary'), sourceText = document.createElement('pre');
+            sourceTitle.textContent = `${record.sourceMessageIds.length} exact source links`;
+            sourceText.textContent = record.sourceMessageIds.map(id => {
+                const source = linked.find(item => item.id === id);
+                return source ? `#${source.index} · ${source.name} · ${id}` : `${id} · unavailable`;
+            }).join('\n');
+            sourceDetails.append(sourceTitle, sourceText);
+            const actions = document.createElement('div'); actions.className = 'wm-actions';
+            const action = (name, callback) => button(name, async () => {
+                if (ctx().chatMetadata !== metadata) return;
+                try { await callback(); history.changed(); }
+                finally { await renderArchive(); renderBusy(); }
+            });
+            actions.append(action('Save text', () => archiveRuntime.edit(record.id, text.value)),
+                action('Regenerate · 2 calls', () => archiveRuntime.regenerate(record.id)),
+                action('Refine · 2 calls', () => archiveRuntime.refine(record.id)),
+                action('Rebuild search notes / WI', () => archiveRuntime.backfillMemoryMetadata({ packetId: record.id, force: true })),
+                action('Delete', () => archiveRuntime.remove(record.id)));
+            if (!record.manual && !record.stale) actions.append(action(record.storySpine ? 'Rebuild story skeleton' : 'Prepare story skeleton',
+                () => archiveRuntime.backfillStorySpine({ packetId: record.id, force: true, responseTokens: settings().responseTokens })));
+            if (record.stale) {
+                const warning = document.createElement('p'); warning.className = 'wm-muted';
+                warning.textContent = 'The linked messages were edited or removed. This saved account is retained but excluded from retrieval until refreshed. Regenerate uses its exact remaining source set; missing originals need your review.';
+                panel.append(warning);
+            }
+            if (record.annotationError) {
+                const warning = document.createElement('p'); warning.className = 'wm-muted';
+                warning.textContent = `Saved L0 kept. ${record.annotationError} Use Rebuild search notes / WI to retry this step only.`;
+                panel.append(warning);
+            }
+            if (record.storySpineError) {
+                const warning = document.createElement('p'); warning.className = 'wm-muted';
+                warning.textContent = `Saved L0 kept. ${record.storySpineError}`; panel.append(warning);
+            }
+            panel.append(text, sourceDetails, actions); renderBusy();
+        });
+        container.append(panel);
     }
     renderBusy();
 }
@@ -968,6 +1122,7 @@ function renderSummaryPrompts() {
 async function render() {
     const memory = state(), s = settings(), metadata = ctx().chatMetadata;
     renderWIProblem(memory);
+    renderCoverage();
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
     const embedded = character?.data?.extensions?.worldMemoryBackup;
@@ -1125,6 +1280,74 @@ async function downloadWIDiagnostics() {
         ? `В диагностике ${responseCount} полных/частичных текстов ответа: responses → responseText. Они сохраняются после перезагрузки. Файл содержит текст игры; поля API-подключения не включены.`
         : rawResponseBodyCount ? `Текст модели не извлечён, но в файле есть ${rawResponseBodyCount} сырых HTTP/stream ответов: responses → rawResponseBody.`
             : 'В файле 0 текстов ответа модели — только сведения об ошибках/запросах. Новых полученных ответов в этом чате ещё нет; утраченные старой версией ответы восстановить нельзя.');
+}
+let supportExporting = false;
+async function exportEverything() {
+    if (supportExporting) return;
+    const context = ctx(), metadata = context.chatMetadata;
+    if (!context.chatId) { status('Откройте чат для экспорта всех данных.'); return; }
+    supportExporting = true;
+    $('#wm_export_all').prop('disabled', true);
+    try {
+        const character = context.characters?.[context.characterId], avatar = character?.avatar;
+        const nativeSettings = {};
+        for (const key of ['chat_completion_source', 'openai_model', 'claude_model', 'google_model', 'custom_model',
+            'custom_url', 'reverse_proxy', 'openai_max_context', 'openai_max_tokens', 'stream_openai',
+            'temperature', 'top_p', 'names_behavior', 'custom_prompt_post_processing'])
+            if (context.chatCompletionSettings?.[key] !== undefined) nativeSettings[key] = context.chatCompletionSettings[key];
+        const worldInfo = { bindings: { global: nativeWI.selected_world_info || [],
+            character: character?.data?.extensions?.world || null,
+            chat: metadata.world_info || null, persona: context.powerUserSettings?.persona_description_lorebook || null,
+            extra: (nativeWI.world_info?.charLore || []).filter(row => row.name === avatar || row.name === avatar?.replace(/\.png$/i, ''))
+                .flatMap(row => row.extraBooks || []) } };
+        for (const key of ['world_info_depth', 'world_info_budget', 'world_info_budget_cap', 'world_info_recursive',
+            'world_info_match_whole_words', 'world_info_case_sensitive', 'world_info_character_strategy', 'world_info_max_recursion_steps'])
+            worldInfo[key] = nativeWI[key];
+        const bundle = await collectSupportBundle({ context, version: VERSION,
+            settings: { worldMemory: context.extensionSettings.worldMemory, russianWIForms: context.extensionSettings.russianWIForms,
+                vectorStorage: context.extensionSettings.vectors,
+                summarizerProfile: context.extensionSettings.connectionManager?.profiles?.find(profile => profile.id === context.extensionSettings.worldMemory?.connectionProfileId) || null,
+                native: nativeSettings, disabledExtensions: context.extensionSettings.disabledExtensions || [] },
+            worldInfo, environment: { userAgent: navigator.userAgent, language: navigator.language,
+                viewport: { width: innerWidth, height: innerHeight },
+                tokenizer: context.powerUserSettings?.tokenizer, mainApi: context.mainApi, maxContext: context.maxContext,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                loadedAddonModules: [...new Set(performance.getEntriesByType('resource').map(entry => {
+                    try { return new URL(entry.name).pathname; } catch { return ''; }
+                }).filter(path => path.includes('/scripts/extensions/')))] },
+            inspections: { prompts: () => archiveRuntime.inspectPrompts(), history: () => history.inspect(),
+                semanticWI: () => semanticWI.inspect(), knowledge: () => knowledgeRuntime.inspect(),
+                contextBudget: () => lastContextStatistics, nativePromptSize: () => nativePromptSize,
+                wiSize: () => wiSize, lastNativeWIScan: () => lastNativeWIScan,
+                ui: () => Object.fromEntries(['wm_status', 'wm_wi_problem', 'wm_saved_wi_status', 'wm_prompt_size', 'wm_coverage_summary']
+                    .map(id => [id, document.getElementById(id)?.textContent || ''])) },
+            readBook: async name => {
+                // ST's /get returns an empty dummy book for an unknown name.
+                // Preserve that distinction instead of reporting it as saved WI.
+                if (Array.isArray(nativeWI.world_names) && !nativeWI.world_names.includes(name))
+                    throw new Error(`WI absent from ST book catalogue: ${name}`);
+                const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: context.getRequestHeaders(), body: JSON.stringify({ name }) });
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${name}`);
+                const book = await response.json();
+                if (!book?.entries) throw new Error(`WI not found: ${name}`);
+                return book;
+            },
+            readCover: async sourceAvatar => {
+                const response = await fetch(`/characters/${encodeURIComponent(sourceAvatar)}`, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`Cover HTTP ${response.status}`);
+                // The card JSON is captured separately. Drop its bulky PNG text
+                // chunks without decoding them; raster/cover chunks stay exact.
+                const cover = portablePng(await response.arrayBuffer(), { spec: 'chara_card_v2', spec_version: '2.0', data: { name: character.data?.name || character.name } });
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(reader.error); reader.readAsDataURL(cover);
+                });
+                return { avatar: sourceAvatar, dataUrl, cardTextCapturedSeparately: true };
+            } });
+        if (ctx().chatMetadata !== metadata || ctx().chat !== context.chat)
+            throw new Error('Чат сменился во время экспорта. Нажмите «Экспорт всего» в нужном чате.');
+        download(`WorldMemory-all-${Date.now()}.json`, bundle);
+        status(`Экспортировано одним файлом: ${bundle.counts.messages} сообщений, ${bundle.counts.l0} L0, ${bundle.counts.books} книг WI.${bundle.errors.length ? ` Не удалось прочитать разделов: ${bundle.errors.length}; причины указаны в файле, остальные данные сохранены.` : ''} Файл содержит игру и ответы модели; ключи подключения не экспортированы.`);
+    } finally { supportExporting = false; $('#wm_export_all').prop('disabled', false); }
 }
 async function exportBackup() {
     const context = ctx(), metadata = context.chatMetadata, memory = state();
@@ -1640,12 +1863,18 @@ async function init() {
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
     $('#wm_reparse_response').on('click', () => { void backfillMetadata({ force: true, savedResponsesOnly: true }); });
     $('#wm_wi_diagnostics').on('click', () => { void downloadWIDiagnostics().catch(error => status(error.message)); });
+    $('#wm_export_all').on('click', () => { void exportEverything().catch(error => status(error.message)); });
     $('#wm_backfill_metadata').on('click', () => {
         const repeat = document.getElementById('wm_repeat_metadata'), force = repeat.checked;
         repeat.checked = false;
         void backfillMetadata({ force });
     });
     $('#wm_backfill_spine').on('click', () => { void backfillSpine(); });
+    $('#wm_coverage_prepare').on('click', () => { void backfillMetadata(); });
+    $('#wm_coverage_apply').on('click', () => { void update(false, true); });
+    $('#wm_coverage_spine').on('click', () => { void backfillSpine(); });
+    $('#wm_coverage_stop').on('click', () => { $('#wm_stop').trigger('click'); });
+    $('[data-coverage-filter]').on('click', event => { coverageFilter = event.currentTarget.dataset.coverageFilter; renderCoverage(); });
     $('#wm_stop').on('click', () => { clearTimeout(timer); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy(); });
     $('#wm_summarize').on('click', () => { void archiveRuntime.summarizeNow().then(renderArchive).catch(error => status(error.message)).finally(renderBusy); });
     $('#wm_clear_embeddings').on('click', async () => {
