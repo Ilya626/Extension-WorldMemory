@@ -8,7 +8,8 @@ import { stripReasoningBlocks, requireModelOutput, getModelOutputIssue } from '.
 import { metadataSources, readMemoryMetadata, memoryTextRevision, MEMORY_METADATA_INSTRUCTION } from './vendor/summaryception/memory-metadata.js';
 import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget, chatWorldInfo } from './vendor/summaryception/world-info-context.js';
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
-import { TIMELINE_INSTRUCTION } from './timeline-sidecar.js';
+import { TIMELINE_INSTRUCTION, CALENDAR_INSTRUCTION } from './timeline-sidecar.js';
+import { resolveCalendar } from './timeline-calendar.js';
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
@@ -51,7 +52,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     const snapshot = (options = {}) => {
         const context = ctx();
         for (const message of context.chat || []) sourceId(message);
-        return archiveSnapshot(getArchive(), context, options);
+        const value = archiveSnapshot(getArchive(), context, options);
+        value.calendar = resolveCalendar(value.packets, context.chatMetadata);
+        return value;
     };
     const historyText = () => {
         try { const text = historyProvider?.(); return typeof text === 'string' && text.trim() ? text : null; }
@@ -224,7 +227,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     function l0System() {
         return [config().summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
             'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
-            STORY_SPINE_INSTRUCTION, TIMELINE_INSTRUCTION].join('\n\n');
+            STORY_SPINE_INSTRUCTION, TIMELINE_INSTRUCTION, CALENDAR_INSTRUCTION].join('\n\n');
     }
     function metadataSystem(wiSystemPrompt, knowledgeActive = false) {
         return [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wiSystemPrompt,
@@ -265,6 +268,11 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             .replaceAll('{{story_txt}}', () => story);
         if (!template.includes('{{context_str}}')) prompt += `\n\n<previous_l0>\n${previous?.text || '(first L0; none)'}\n</previous_l0>`;
         if (!template.includes('{{story_txt}}')) prompt += `\n\n<new_sources>\n${story}\n</new_sources>`;
+        const before = Math.min(...sources.map(source => source.index));
+        const priorPackets = snapshot().packets.filter(packet => packet.order < before && packet.id !== existing?.id);
+        const calendar = resolveCalendar(priorPackets, ctx().chatMetadata);
+        prompt += `\n\n<calendar_context>\n${JSON.stringify({ anchor: calendar.anchor, current: calendar.now,
+            rule: 'Continue this fixed epoch and accumulated date. Calendar dayOffset is relative to this current calendar day.' })}\n</calendar_context>`;
         if (existing !== null) prompt += `\n\n<existing_summary>\n${existing}\n</existing_summary>\nRefine the complete existing_summary against exactly new_sources. Retain all its supported details, recover omissions and correct unsupported claims. This is a complete replacement, not a delta; do not drop facts as already known from previous_l0.`;
         if (s.summarizerWorldInfo && chatWorldInfo(ctx())) {
             status('Scanning native World Info for the source packet and previous L0.');

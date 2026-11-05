@@ -1,5 +1,7 @@
 # WorldMemory for SillyTavern
 
+**One game calendar:** the same L0 response records dated player locations and calendar transitions. The next L0 request receives the fixed per-chat epoch and accumulated date. A next-morning transition advances the calendar day without inventing an exact hour. `archive.snapshot().calendar` is the shared authority used by Atlas route and calendar dates; original relative wording remains evidence. Atlas offers a Legends calendar profile with familiar day/month aliases of the same game date and BBY/ABY year, not an Earth-date conversion. Unknown older intervals remain explicit; no model calls run automatically to reconstruct them.
+
 **One-file game handoff:** **Экспорт всего** saves a complete private support bundle. **Импорт всего** creates a separate character, related lorebooks and complete chat/memory from that file. Copies share the next free suffix, such as `Import_(1)`; original games and API connection settings are preserved. Use this to exchange and improve complete game setups without replacing the installed original.
 
 **ST crashes while loading a large game PNG?** See [startup recovery](tools/PNG_RECOVERY_RU.md). The standalone repair replaces the dependency's memory-heavy PNG text decoder; it keeps cards and chats unchanged. Updating a browser extension alone cannot repair a crash before the browser loads.
