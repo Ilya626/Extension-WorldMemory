@@ -1,4 +1,5 @@
-import { countPromptTokens, tokenCounterStatus } from './token-counter.js';
+import { countPromptTokens, calibratedContextTokens, contextCounterStatus } from './token-counter.js';
+import { contextCalibrationScope } from './context-calibration.js';
 import { supportSettings } from './support-export.js';
 
 // Keep one game request in memory. Nothing is written into chat/card metadata.
@@ -27,6 +28,7 @@ export function installPromptDiagnostics({ ctx }) {
         const current = context();
         last = { identity: identity(current), capturedAt: new Date().toISOString(), localCaptureId: crypto.randomUUID(),
             chatId: current.chatId, tokenizerModel: current.getTokenizerModel?.(), mainApi: current.mainApi,
+            connectionScope: contextCalibrationScope(current)?.key,
             pending: data, reply: null, inFlight: true };
     });
     if (events.MESSAGE_RECEIVED) c.eventSource.on(events.MESSAGE_RECEIVED, (index, type) => {
@@ -42,10 +44,12 @@ export function installPromptDiagnostics({ ctx }) {
         if (last.pending) return unavailable('Game generation is still in progress. Export after it finishes or stops; the final native request is not frozen yet.');
         const record = last, payload = structuredClone(record.payload), current = context();
         let localEstimate = { status: 'unknown', reason: 'The tokenizer/model changed after this request.' };
-        if (record.mainApi === current.mainApi && record.tokenizerModel === current.getTokenizerModel?.()) {
+        if (record.mainApi === current.mainApi && record.tokenizerModel === current.getTokenizerModel?.()
+            && record.connectionScope === contextCalibrationScope(current)?.key) {
             try {
-                localEstimate = { status: 'available', tokens: await countPromptTokens(payload.messages, current),
-                    estimated: true, estimator: tokenCounterStatus(current).estimator, scope: 'captured-native-request',
+                const proxyTokens = await countPromptTokens(payload.messages, current), counter = contextCounterStatus(current);
+                localEstimate = { status: 'available', tokens: calibratedContextTokens(proxyTokens, current), proxyTokens,
+                    calibration: counter.calibration, estimated: true, estimator: counter.estimator, scope: 'captured-native-request',
                     providerUsage: false };
             } catch (error) { localEstimate = { status: 'unknown', reason: error.message }; }
         }

@@ -8,7 +8,8 @@ import { contextPolicy, recommendContextBudget, contextStatistics } from './cont
 import { planRawContext, blindZoneStart } from './vendor/summaryception/raw-context.js';
 import { installArchiveRuntime } from './archive-runtime.js';
 import { SUMMARY_PROMPT_KEYS, copyLegacyPrompt, rememberPromptOrigin, describePromptOrigin, resetSummaryPrompts } from './summary-prompt-settings.js';
-import { countTextTokens, tokenCounterStatus } from './token-counter.js';
+import { countTextTokens, countContextTextTokens, calibratedContextTokens, contextCounterStatus, contextCounterKey, prepareTokenCounter, tokenCounterKey } from './token-counter.js';
+import { contextCalibrationScope, saveContextCalibration, resetContextCalibration } from './context-calibration.js';
 import { createSemanticWIRuntime } from './semantic-wi-runtime.js';
 import { placeSceneProfiles, removeDuplicateProfiles, profileSignature } from './scene-wi.js';
 import { createKnowledgeRuntime, ensureKnowledgeInstances, rebindKnowledgeIdentities } from './knowledge-runtime.js';
@@ -1147,7 +1148,9 @@ function scheduleContextStatistics() {
 }
 async function renderContextStatistics(run) {
     const context = ctx(), metadata = context.chatMetadata, s = settings(), view = archiveRuntime?.snapshot({ effective: false });
-    const current = () => run === budgetRenderSerial && ctx().chatMetadata === metadata && ctx().chat === context.chat;
+    await prepareTokenCounter(context);
+    const scale = contextCounterKey(context);
+    const current = () => run === budgetRenderSerial && ctx().chatMetadata === metadata && ctx().chat === context.chat && contextCounterKey(context) === scale;
     let rawPlan = {}, selected = { tokens: 0, baselineTokens: 0 }, protectedTokens = 0;
     if (view && context.chatId) {
         const archive = getArchive(), legacy = Object.values(archive.legacy || {});
@@ -1157,16 +1160,19 @@ async function renderContextStatistics(run) {
         if (!current()) return;
         const protectedText = context.chat.slice(blindZoneStart(context.chat, s)).filter(message => !message.is_system)
             .map(message => `${message.name || (message.is_user ? 'User' : 'Assistant')}: ${message.mes}`).join('\n');
-        protectedTokens = protectedText ? await countTextTokens(protectedText, context) : 0;
+        protectedTokens = protectedText ? await countContextTextTokens(protectedText, context) : 0;
         const prepared = history.inspect();
         selected = prepared || await selectHistory(archiveHistoryNodes(view), [], { storyNodes: archiveStoryNodes(view),
-            targetTokens: s.historyMaxTokens, countTokens: text => countTextTokens(text, context),
+            targetTokens: s.historyMaxTokens, countTokens: text => countContextTextTokens(text, context),
             format: text => (s.injectionTemplate || '{{summary}}').replace('{{summary}}', () => text) });
     }
     if (!current()) return;
-    const wiTokens = wiSize?.metadata === metadata ? wiSize.tokens : undefined;
-    const observed = nativePromptSize?.metadata === metadata ? nativePromptSize.info : null;
-    const stats = contextStatistics({ settings: s, rawPlan, history: selected, protectedTokens, wiTokens, nativePrompt: observed });
+    const wiTokens = wiSize?.metadata === metadata && wiSize.counterKey === scale ? wiSize.tokens : undefined;
+    const observed = nativePromptSize?.metadata === metadata && nativePromptSize.counterKey === scale ? nativePromptSize.info : null;
+    // ST's WI cap remains native. Convert only the planning copy so every term
+    // added to the main-context total uses the calibrated scale.
+    const planning = { ...s, wiActivationTokens: calibratedContextTokens(s.wiActivationTokens, context) };
+    const stats = contextStatistics({ settings: planning, rawPlan, history: selected, protectedTokens, wiTokens, nativePrompt: observed });
     lastContextStatistics = stats;
     const n = value => value === null || value === undefined ? '?' : Math.round(value).toLocaleString();
     const h = stats.history, p = stats.policy;
@@ -1194,11 +1200,28 @@ async function renderContextStatistics(run) {
     document.getElementById('wm_context_breakdown').replaceChildren(...lines.map(text => {
         const line = document.createElement('div'); line.textContent = text; return line;
     }));
-    const counter = tokenCounterStatus(context);
+    const counter = contextCounterStatus(context);
     const counterLabel = counter.mode === 'o200k' ? 'локальный o200k: штатный токенизатор недоступен'
         : counter.mode === 'approx' ? 'грубая оценка по длине: локальные токенизаторы недоступны'
             : counter.mode === 'pending' ? 'проверяется' : counter.nativeVerified ? `штатный ${counter.model}, token IDs проверены` : 'счётчик ST';
-    document.getElementById('wm_token_counter_status').textContent = `Счётчик WorldMemory: ${counterLabel}. Это оценка, не usage провайдера. Внутреннее обрезание и WI-сканирование ST используют свой счётчик и могут отличаться.`;
+    document.getElementById('wm_token_counter_status').textContent = `Счётчик WorldMemory: ${counterLabel}.${counter.calibration.active ? ` Основной контекст: приблизительно x${counter.calibration.factor.toFixed(5)} по одному provider-input замеру.` : ''} Это оценка, не usage провайдера. Внутреннее обрезание и WI-сканирование ST используют свой счётчик и могут отличаться.`;
+    renderContextCalibration(counter);
+}
+
+function renderContextCalibration(counter = contextCounterStatus(ctx())) {
+    const { scope, sample, active, factor, status: state } = counter.calibration;
+    const panel = document.getElementById('wm_calibration'), label = document.getElementById('wm_calibration_status');
+    if (!panel || !label) return;
+    if (panel.dataset.scope !== (scope?.key || '')) {
+        panel.dataset.scope = scope?.key || '';
+        document.getElementById('wm_calibration_proxy').value = sample?.proxyTokens || '';
+        document.getElementById('wm_calibration_input').value = sample?.providerInputTokens || '';
+    }
+    label.textContent = !scope ? 'Выберите Chat Completion подключение и модель.'
+        : `${scope.model} · ${scope.endpoint || scope.source}. ${active ? `Применено x${factor.toFixed(5)} по 1 замеру: приблизительная оценка, зависящая от текста.`
+            : state === 'local-counter-changed' ? 'Калибровка приостановлена: локальный токенизатор изменился; нужен новый парный замер.' : 'Калибровка не применена.'}`;
+    for (const id of ['wm_calibration_apply', 'wm_calibration_proxy_last', 'wm_calibration_reset'])
+        document.getElementById(id).disabled = !scope || busy || archiveRuntime?.isBusy();
 }
 function renderHistoryPlacement(s = settings()) {
     const insideHistory = s.injectionPosition === 1 && s.injectionDepth !== 0;
@@ -1531,7 +1554,7 @@ async function exportEverything() {
             worldInfo[key] = nativeWI[key];
         // These runtime records use metadata only as a chat-identity pointer.
         // The complete metadata/archive already have their own export sections.
-        const scopedInspection = value => value?.metadata === metadata
+        const scopedInspection = value => value?.metadata === metadata && (!value.counterKey || value.counterKey === contextCounterKey(context))
             ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'metadata')) : null;
         const bundle = await collectSupportBundle({ context, version: VERSION,
             settings: { worldMemory: context.extensionSettings.worldMemory, russianWIForms: context.extensionSettings.russianWIForms,
@@ -2033,6 +2056,34 @@ async function init() {
         getBook, saveBook, initializeEntry, saveState });
     history = installHistory({ ctx, settings, state, saveState, status, bridge });
     promptDiagnostics = installPromptDiagnostics({ ctx });
+    const calibrationChanged = () => {
+        history.changed(); nativePromptSize = null; wiSize = null; lastContextStatistics = null; wiMeasurementSerial++;
+        ctx().saveSettingsDebounced(); scheduleContextStatistics(); renderContextCalibration();
+    };
+    $('#wm_calibration_apply').on('click', async () => {
+        if (busy || archiveRuntime.isBusy()) return;
+        try {
+            const context = ctx(), scope = contextCalibrationScope(context)?.key;
+            await prepareTokenCounter(context);
+            if (contextCalibrationScope(ctx())?.key !== scope) throw new Error('Подключение изменилось. Примените парный замер к нужной модели.');
+            const result = saveContextCalibration(context, tokenCounterKey(context), document.getElementById('wm_calibration_proxy').value,
+                document.getElementById('wm_calibration_input').value);
+            calibrationChanged(); status(`Калибровка основного контекста x${result.factor.toFixed(5)} по одному замеру применена; оценка приблизительная. Ручные значения сохранены.`);
+        } catch (error) { status(error.message); }
+    });
+    $('#wm_calibration_reset').on('click', () => {
+        if (busy || archiveRuntime.isBusy()) return;
+        resetContextCalibration(ctx()); document.getElementById('wm_calibration').dataset.scope = ''; calibrationChanged();
+    });
+    $('#wm_calibration_proxy_last').on('click', async () => {
+        try {
+            const last = await promptDiagnostics.inspect();
+            if (last.localEstimate?.status !== 'available' || !Number.isFinite(last.localEstimate.proxyTokens))
+                throw new Error('Последний WM proxy этого подключения недоступен. Введите парный замер вручную; новая генерация не запускается.');
+            document.getElementById('wm_calibration_proxy').value = last.localEstimate.proxyTokens;
+            status('Подставлен WM proxy до калибровки. Введите provider prompt/input именно этого запроса.');
+        } catch (error) { status(error.message); }
+    });
     semanticWI = createSemanticWIRuntime({ ctx, settings, embeddings: history.embeddings,
         sourceQueries: getSummaryWorldInfoSources, sourceSignal: getSummaryWorldInfoSignal, onUpdate: renderWIStatus });
     knowledgeRuntime = createKnowledgeRuntime({ ctx, settings, snapshot: () => archiveRuntime.snapshot(),
@@ -2050,6 +2101,7 @@ async function init() {
         if (busy || archiveRuntime.isBusy()) return;
         const s = settings();
         const recommended = recommendContextBudget(s.promptTargetTokens, { historyBaselineTokens: lastContextStatistics?.history.baselineTokens || 0 });
+        recommended.wiActivationTokens = Math.max(1, Math.floor(recommended.wiActivationTokens / contextCounterStatus(ctx()).calibration.factor));
         Object.assign(s, recommended, { enabled: true, history: true, hints: true, historySemantic: true, wiSemantic: false, historyEmbeddingMode: 'api',
             injectionPosition: 0, historySpineRerank: false, knowledgeBoundaries: false, awarenessGraph: false });
         s.historyEmbeddingAPI = { ...s.historyEmbeddingAPI, model: 'gemini-embedding-2-preview', revision: 'gemini-embedding-2-preview', dimensions: 768, transport: 'google-native' };
@@ -2194,12 +2246,14 @@ async function init() {
         // activated.text is ST's recursion scratch buffer; entries excluded from
         // recursion still reach the prompt and must be included in this estimate.
         const metadata = ctx().chatMetadata, text = activated.map(entry => entry.content || '').join('\n'), measurement = wiMeasurementSerial;
-        const measured = text ? await countTextTokens(text, ctx()) : 0;
+        const measured = text ? await countContextTextTokens(text, ctx()) : 0;
         if (ctx().chatMetadata === metadata && measurement === wiMeasurementSerial && !getSummaryWorldInfoSources() && !nativeReferenceScope) {
-            wiSize = { metadata, tokens: measured }; scheduleContextStatistics();
+            wiSize = { metadata, counterKey: contextCounterKey(ctx()), tokens: measured }; scheduleContextStatistics();
         }
     });
-    ctx().eventSource.on('worldmemory:prompt-size', info => { nativePromptSize = { metadata: ctx().chatMetadata, info }; scheduleContextStatistics(); });
+    ctx().eventSource.on('worldmemory:prompt-size', info => { nativePromptSize = { metadata: ctx().chatMetadata, counterKey: info.counterKey, info }; scheduleContextStatistics(); });
+    for (const event of [events.CHATCOMPLETION_MODEL_CHANGED, events.CHATCOMPLETION_SOURCE_CHANGED, events.OAI_PRESET_CHANGED_AFTER].filter(Boolean))
+        ctx().eventSource.on(event, () => { history.changed(); nativePromptSize = null; wiSize = null; lastContextStatistics = null; wiMeasurementSerial++; scheduleContextStatistics(); });
     ctx().eventSource.on('worldmemory:archive-changed', event => { if (event.metadata === ctx().chatMetadata) { history.changed(); schedule(); scheduleContextStatistics(); } });
     ctx().eventSource.on(events.CHAT_CHANGED, async () => {
         clearTimeout(cardRestoreTimer);

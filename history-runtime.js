@@ -8,7 +8,8 @@ import { installHistoryInjection } from './history-injection.js';
 import { topUpHistory } from './history-topup.js';
 import { blindZoneStart } from './vendor/summaryception/raw-context.js';
 import { semanticWIQuery } from './semantic-wi-runtime.js';
-import { countTextTokens, countPromptTokens, prepareTokenCounter, tokenCounterKey, tokenCounterStatus } from './token-counter.js';
+import { countContextTextTokens as countTextTokens, countContextPromptTokens as countPromptTokens, prepareTokenCounter,
+    contextCounterKey as tokenCounterKey, contextCounterStatus as tokenCounterStatus } from './token-counter.js';
 
 const REGEX_ID = 'world-memory-service-hint';
 export function installHistory({ ctx, settings, state, saveState, status, bridge }) {
@@ -68,7 +69,7 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             }
         }
         try {
-            const protectedTokens = protectedMessages.length ? Math.max(0, await countPromptTokens(protectedMessages, current) - 3) : 0;
+            const protectedTokens = protectedMessages.length ? Math.max(0, await countPromptTokens(protectedMessages, current) - tokenCounterStatus(current).replyFramingTokens) : 0;
             // Use the same wrapper/counting scale as the initial selection, so
             // its already-counted prefixes can be reused by the final fill.
             const formatHistory = text => render(work.selectionOptions.format(text));

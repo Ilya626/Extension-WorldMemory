@@ -1,4 +1,5 @@
 // One local counting scale for WorldMemory. Never changes ST settings or contacts a provider.
+import { contextCalibration } from './context-calibration.js';
 const states = new Map();
 const PROBE = 'Token counter check. Проверка токенизатора.';
 const MAX_CACHE = 512;
@@ -78,6 +79,26 @@ export function tokenCounterStatus(context) {
         chatFraming: FRAMING, key: `${state.key}:${state.mode}:${state.nativeVerified ? 'verified' : 'configured'}` };
 }
 export const tokenCounterKey = context => tokenCounterStatus(context).key;
+
+export function contextCounterStatus(context) {
+    const current = contextOf(context), base = tokenCounterStatus(current), calibration = contextCalibration(current, base.key);
+    const factor = calibration.factor;
+    return { ...base, calibration, proxyEstimator: base.estimator, replyFramingTokens: Math.ceil(3 * factor),
+        estimator: calibration.active ? `${base.estimator}; main-context calibration x${factor.toFixed(5)} from ONE provider-input sample; approximate` : base.estimator,
+        key: calibration.scope ? `${base.key}|${calibration.scope.key}|${factor}` : base.key };
+}
+export const contextCounterKey = context => contextCounterStatus(context).key;
+export const calibratedContextTokens = (tokens, context) => {
+    const calibration = contextCounterStatus(context).calibration;
+    return calibration.active ? Math.ceil(tokens * calibration.sample.providerInputTokens / calibration.sample.proxyTokens) : Math.ceil(tokens);
+};
+
+export async function countContextTextTokens(text, context) {
+    return calibratedContextTokens(await countTextTokens(text, context), context);
+}
+export async function countContextPromptTokens(prompt, context) {
+    return calibratedContextTokens(await countPromptTokens(prompt, context), context);
+}
 
 async function countUncached(text, current, state) {
     let count, mode = state.mode;

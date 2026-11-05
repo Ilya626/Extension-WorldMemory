@@ -1,7 +1,7 @@
 import { collectPassage, pendingSourceIds, sourceId } from './summary-sources.js';
 import { getModelOutputIssue } from './output-validation.js';
 import { summaryDecision } from '../../context-budget.js';
-import { countTextTokens, tokenCounterStatus } from '../../token-counter.js';
+import { countTextTokens, calibratedContextTokens, prepareTokenCounter, contextCounterKey, contextCounterStatus as tokenCounterStatus } from '../../token-counter.js';
 
 const positive = (value, fallback) => Math.max(1, Math.floor(Number(value) || fallback));
 
@@ -31,15 +31,19 @@ export function blindZoneStart(chat, settings) {
     return count && completed.length ? completed[Math.max(0, completed.length - count)].indices[0] : trailingStart;
 }
 
-async function measure(text) {
-    const ctx = SillyTavern.getContext();
+async function measure(text, ctx) {
     const count = await countTextTokens(text, ctx);
     return { tokens: Math.max(1, Number(count) || 1),
+        contextTokens: Math.max(1, calibratedContextTokens(count, ctx)),
         estimated: true, estimator: tokenCounterStatus(ctx).estimator };
 }
 
 /** Blind exchanges are removed before tokenization, retention and batching. */
 export async function planRawContext(chat, store, settings, stopped = () => false) {
+    if (stopped()) return { ready: false, hasBatch: false, batchCount: 0 };
+    const counterContext = SillyTavern.getContext();
+    await prepareTokenCounter(counterContext);
+    const counterKey = contextCounterKey(counterContext);
     const covered = pendingSourceIds(store);
     const groups = chatExchanges(chat).filter(group => group.hasAssistant);
     const blindStart = blindZoneStart(chat, settings);
@@ -50,19 +54,28 @@ export async function planRawContext(chat, store, settings, stopped = () => fals
         const indices = group.indices.filter(index => !chat[index].is_system && !covered.has(sourceId(chat[index])));
         const passage = collectPassage(chat, indices);
         if (!passage.indices.some(index => !chat[index].is_user)) continue;
-        const measured = await measure(passage.text);
+        const measured = await measure(passage.text, counterContext);
         if (stopped()) return { ready: false, hasBatch: false, batchCount: 0 };
-        eligible.push({ ...passage, tokens: measured.tokens, estimated: measured.estimated });
+        // A late tokenizer fallback invalidates ALL earlier group counts, not
+        // just this group. Archive callers need the same stable-plan guarantee.
+        if (contextCounterKey(counterContext) !== counterKey) return planRawContext(chat, store, settings, stopped);
+        eligible.push({ ...passage, tokens: measured.tokens, contextTokens: measured.contextTokens, estimated: measured.estimated });
     }
     const retained = Number(settings.retainedContextTokens ?? 12000);
     const retainedBudget = Number.isFinite(retained) ? Math.max(0, Math.floor(retained)) : 12000;
     const batchBudget = positive(settings.batchContextTokens, 24000);
     const triggerBudget = positive(settings.compressionTriggerTokens, batchBudget);
     let boundary = eligible.length;
-    let retainedTokens = 0;
-    while (boundary > 0 && retainedTokens < retainedBudget) retainedTokens += eligible[--boundary].tokens;
+    let retainedTokens = 0, retainedProxyTokens = 0;
+    // Calibration must not shorten the mandatory tail that the same manual R
+    // already retained. Keep that native floor as well as the context allowance.
+    while (boundary > 0 && (retainedTokens < retainedBudget || retainedProxyTokens < retainedBudget)) {
+        const group = eligible[--boundary]; retainedTokens += group.contextTokens; retainedProxyTokens += group.tokens;
+    }
     const available = eligible.slice(0, boundary);
-    const availableTokens = available.reduce((sum, group) => sum + group.tokens, 0);
+    const availableTokens = available.reduce((sum, group) => sum + group.contextTokens, 0);
+    // R/T use the main-context scale. Summary API batching keeps the original
+    // local counts and its independent manual batchContextTokens allowance.
     const batch = [];
     let batchTokens = 0;
     for (const group of available) {

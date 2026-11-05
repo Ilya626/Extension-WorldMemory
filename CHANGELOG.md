@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.29 — 2026-11-06 — optional main-context calibration
+
+- Apply/reset one measured WM-proxy/provider-input pair for the current connection, profile, known actual model and local counting scale. One sample remains an approximation; no provider/model is preconfigured and no model request is added.
+- Use one calibrated scale for history selection, raw-context estimates, protected exchanges, WI estimates and final top-up. Preserve manual settings, the complete outline, mandatory native raw tail and independent summary batch units.
+- Invalidate measured sizes on scale changes, restart raw planning after a tokenizer fallback, and pause calibration when the local scale or actual model is unknown/changed. Export raw proxy and calibrated estimate separately from provider usage.
+
 ## 0.5.27 — 2026-11-05 — timeline metadata and request diagnostics
 
 - Return source-linked dates, elapsed time and actual player locations with the same L0 response for WorldAtlas's calendar and route. Invalid timeline metadata preserves L0.

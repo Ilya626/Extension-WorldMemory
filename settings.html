@@ -54,6 +54,16 @@
         <div class="wm-field wm-context-target"><label for="wm_prompt_target">Desired context (tokens) · Желаемый контекст</label><input id="wm_prompt_target" data-setting="promptTargetTokens" class="text_pole" type="number" min="1" step="1000" aria-describedby="wm_context_help"></div>
         <small id="wm_context_help" class="wm-muted">После сборки Chat Completion запроса добираем историю до этой цели, если есть подходящие целые фрагменты. Защищённые обмены P идут сверх неё. Ручные значения не уменьшаются. Окно модели и резерв ответа задаются отдельно в ST и должны вмещать план + P.</small>
         <small id="wm_token_counter_status" class="wm-muted" role="status"></small>
+        <details id="wm_calibration" class="wm-advanced"><summary>Provider input calibration · Калибровка входа</summary>
+          <small id="wm_calibration_status" class="wm-muted" style="overflow-wrap:anywhere" role="status"></small>
+          <small class="wm-muted">Оба числа — из одного запроса: WM proxy до калибровки и provider prompt/input. Не используйте total/output/thinking. Один замер даёт приблизительную оценку для текущего подключения, профиля и модели. Ручные квоты не изменяются; полный L″ и обязательный native-хвост сохраняются, даже при превышении цели.</small>
+          <div class="wm-grid wm-budget-grid">
+            <div class="wm-field"><label for="wm_calibration_proxy">WM proxy input · Локальный вход до калибровки</label><input id="wm_calibration_proxy" class="text_pole" type="number" min="1" step="1"></div>
+            <div class="wm-field"><label for="wm_calibration_input">Provider prompt/input tokens · Вход провайдера</label><input id="wm_calibration_input" class="text_pole" type="number" min="1" step="1"></div>
+          </div>
+          <div class="wm-actions"><button id="wm_calibration_proxy_last" class="menu_button" type="button">Use last WM proxy · Подставить последний WM proxy</button><button id="wm_calibration_apply" class="menu_button" type="button">Apply pair · Применить замер</button><button id="wm_calibration_reset" class="menu_button" type="button">Reset current calibration · Сбросить для подключения</button></div>
+          <small class="wm-muted">Эти действия не вызывают модель. Лимиты WI и счётчик обрезания самого ST остаются в его собственной шкале; общий контекст WM оценивается с калибровкой.</small>
+        </details>
         <button id="wm_apply_recommended" class="menu_button" type="button">Recommend values for this context · Подобрать значения</button>
         <small class="wm-muted">Applies suggested values explicitly; every allowance stays editable. API connections and keys are separate.</small>
         <div class="wm-grid wm-budget-grid">
@@ -94,7 +104,7 @@
           <div class="wm-field"><label for="wm_ollama_model">Ollama model</label><input id="wm_ollama_model" data-setting="ollamaModel" class="text_pole" type="text" spellcheck="false"></div>
           <details class="wm-advanced"><summary>Ollama response default</summary><small class="wm-muted">Used when the response token override is 0.</small><div class="wm-field"><label for="wm_ollama_max_tokens">Ollama response tokens (0 = model default)</label><input id="wm_ollama_max_tokens" data-setting="ollamaMaxTokens" class="text_pole" type="number" min="0" step="512"></div></details>
         </div>
-        <div class="wm-field"><label for="wm_batch_tokens">Maximum source tokens per call · Максимум исходников на вызов</label><input id="wm_batch_tokens" data-setting="batchContextTokens" class="text_pole" type="number" min="1" step="500"></div>
+        <div class="wm-field"><label for="wm_batch_tokens">Maximum source tokens per call · Максимум исходников на вызов</label><input id="wm_batch_tokens" data-setting="batchContextTokens" class="text_pole" type="number" min="1" step="500"><small class="wm-muted">Local source-count units for summarization; main-context calibration does not scale this batch limit.</small></div>
         <small class="wm-muted">Maximum for one background source packet, separate from trigger T. A single oversized exchange is kept whole with a warning. Previous L0, WI and instructions add request overhead.</small>
         <details class="wm-advanced"><summary>Advanced summary settings</summary>
         <div class="wm-field"><label for="wm_summary_response_tokens">Response token override (0 = inherit connection)</label><input id="wm_summary_response_tokens" data-setting="summarizerResponseLength" class="text_pole" type="number" min="0" step="512"></div>

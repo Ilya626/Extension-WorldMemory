@@ -3,7 +3,7 @@
  * (updateInjection/placeMemoryBeforeChat/placeTextMemoryBeforeChat), AGPL-3.0.
  * See vendor/summaryception/LICENSE. The caller supplies selected history only.
  */
-import { countPromptTokens, tokenCounterStatus } from './token-counter.js';
+import { countContextPromptTokens as countPromptTokens, contextCounterStatus as tokenCounterStatus } from './token-counter.js';
 const PROMPT_KEY = 'world_memory_history';
 const MEMORY_START = '<world_memory_story_memory>';
 const MEMORY_END = '</world_memory_story_memory>';
@@ -123,6 +123,7 @@ export function installHistoryInjection({ ctx, settings, getText, onPromptSize, 
         tokens ??= Math.ceil(text.length / 4);
         if (context().chat !== chat || context().chatMetadata !== metadata) return;
         await onPromptSize({ tokens, estimated: true, estimator, format,
+            counterKey: tokenCounterStatus(current).key,
             scope: 'assembled-input', serializedChat,
             excludes: ['response tokens', 'provider-side prompt changes', 'native multimodal token accounting'] });
     }
