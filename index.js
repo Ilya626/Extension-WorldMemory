@@ -1529,6 +1529,10 @@ async function exportEverything() {
         for (const key of ['world_info_depth', 'world_info_budget', 'world_info_budget_cap', 'world_info_recursive',
             'world_info_match_whole_words', 'world_info_case_sensitive', 'world_info_character_strategy', 'world_info_max_recursion_steps'])
             worldInfo[key] = nativeWI[key];
+        // These runtime records use metadata only as a chat-identity pointer.
+        // The complete metadata/archive already have their own export sections.
+        const scopedInspection = value => value?.metadata === metadata
+            ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'metadata')) : null;
         const bundle = await collectSupportBundle({ context, version: VERSION,
             settings: { worldMemory: context.extensionSettings.worldMemory, russianWIForms: context.extensionSettings.russianWIForms,
                 vectorStorage: context.extensionSettings.vectors,
@@ -1543,9 +1547,9 @@ async function exportEverything() {
                 }).filter(path => path.includes('/scripts/extensions/')))] },
             inspections: { prompts: () => archiveRuntime.inspectPrompts(), history: () => history.inspect(),
                 semanticWI: () => semanticWI.inspect(), knowledge: () => knowledgeRuntime.inspect(),
-                contextBudget: () => lastContextStatistics, nativePromptSize: () => nativePromptSize,
+                contextBudget: () => lastContextStatistics, nativePromptSize: () => scopedInspection(nativePromptSize),
                 lastGameRequest: () => promptDiagnostics.inspect(),
-                wiSize: () => wiSize, lastNativeWIScan: () => lastNativeWIScan,
+                wiSize: () => scopedInspection(wiSize), lastNativeWIScan: () => scopedInspection(lastNativeWIScan),
                 ui: () => Object.fromEntries(['wm_status', 'wm_wi_problem', 'wm_saved_wi_status', 'wm_prompt_size', 'wm_coverage_summary']
                     .map(id => [id, document.getElementById(id)?.textContent || ''])) },
             readBook: async name => {
@@ -2183,10 +2187,13 @@ async function init() {
             parseRegex: nativeWI.parseRegexFromString, substitute: ctx().substituteParams,
             caseSensitive: nativeWI.world_info_case_sensitive, atDepth: nativeWI.world_info_position.atDepth,
             isActivationReason: key => semanticWI?.isActivationReason(key) }) : [];
-        lastNativeWIScan = { metadata: ctx().chatMetadata, scene, duplicates, entries: [...(args?.activated?.entries?.values?.() || [])]
+        const activated = [...(args?.activated?.entries?.values?.() || [])];
+        lastNativeWIScan = { metadata: ctx().chatMetadata, scene, duplicates, entries: activated
             .map(entry => ({ uid: entry.uid, title: entry.comment, world: entry.world, constant: entry.constant })) };
         renderWIStatus();
-        const metadata = ctx().chatMetadata, text = args?.activated?.text || '', measurement = wiMeasurementSerial;
+        // activated.text is ST's recursion scratch buffer; entries excluded from
+        // recursion still reach the prompt and must be included in this estimate.
+        const metadata = ctx().chatMetadata, text = activated.map(entry => entry.content || '').join('\n'), measurement = wiMeasurementSerial;
         const measured = text ? await countTextTokens(text, ctx()) : 0;
         if (ctx().chatMetadata === metadata && measurement === wiMeasurementSerial && !getSummaryWorldInfoSources() && !nativeReferenceScope) {
             wiSize = { metadata, tokens: measured }; scheduleContextStatistics();

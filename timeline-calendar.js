@@ -5,6 +5,15 @@ const shortRevision = value => { let h = 2166136261; for (const c of String(valu
 export function calendarAnchor(metadata = {}) {
     return metadata.worldMemory?.calendarAnchor || Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.calendarStart)?.calendarStart || {};
 }
+export function calendarProfile(anchor = {}) {
+    return anchor.display === 'sw-legends' ? {
+        id: 'sw-legends-368', continuity: 'Legends', hoursPerDay: 24, daysPerWeek: 5, daysPerStandardMonth: 35,
+        standardMonthsPerYear: 10, daysPerYear: 368,
+        intercalary: 'New Year Fete:5 before month1; Festival of Life:5 after month6; Festival of Stars:5 after month9; 3 locally variable holidays placed at year end by this game convention.',
+        familiarLabels: 'Names only: the same 5-day weeks, 35-day months and BBY/ABY year. No Gregorian conversion.'
+    } : { id: 'game-24h', hoursPerDay: 24, daysPerWeek: null, daysPerStandardMonth: null, daysPerYear: null,
+        rule: 'Unspecified week/month/year lengths must not be assumed from Earth; retain uncertainty or use explicit source durations.' };
+}
 export function calendarTime(value) {
     if (!value) return null;
     if (!Number.isInteger(value.dayOffset) || value.dayOffset < 0
@@ -54,7 +63,7 @@ export function resolveCalendar(packets, metadata = {}, overrideAnchor) {
         if (!events.length) rows.push({ source, index: packet.order, offset: -1, date: info?.date, place: null, clock: entry.end });
         resolved[packet.id] = entry;
     }
-    return { anchor, now: stamp(), packets: resolved, rows };
+    return { anchor, profile: calendarProfile(anchor), now: stamp(), packets: resolved, rows };
 }
 export function formatCalendar(clock, anchor = {}) {
     const prefix = clock.incomplete ? 'Не ранее: ≈ ' : clock.approximate ? '≈ ' : '';

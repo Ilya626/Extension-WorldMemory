@@ -271,7 +271,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const before = Math.min(...sources.map(source => source.index));
         const priorPackets = snapshot().packets.filter(packet => packet.order < before && packet.id !== existing?.id);
         const calendar = resolveCalendar(priorPackets, ctx().chatMetadata);
-        prompt += `\n\n<calendar_context>\n${JSON.stringify({ anchor: calendar.anchor, current: calendar.now,
+        prompt += `\n\n<calendar_context>\n${JSON.stringify({ anchor: calendar.anchor, profile: calendar.profile, current: calendar.now,
             rule: 'Continue this fixed epoch and accumulated date. Calendar dayOffset is relative to this current calendar day.' })}\n</calendar_context>`;
         if (existing !== null) prompt += `\n\n<existing_summary>\n${existing}\n</existing_summary>\nRefine the complete existing_summary against exactly new_sources. Retain all its supported details, recover omissions and correct unsupported claims. This is a complete replacement, not a delta; do not drop facts as already known from previous_l0.`;
         if (s.summarizerWorldInfo && chatWorldInfo(ctx())) {

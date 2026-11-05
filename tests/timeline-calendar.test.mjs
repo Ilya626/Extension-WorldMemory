@@ -10,7 +10,7 @@ test('next morning continues the preceding L0 calendar and its epoch is passed t
     const previous = 'At 22:00 the player rests at the harbor.';
     const quote = 'The next morning you arrive at the market.';
     const context = { chatId: 'calendar-continuity', name1: 'Player', chatMetadata: { worldMemory: {
-        calendarAnchor: { label: 'Scenario start', offsetDays: -60, approximate: true } } },
+        calendarAnchor: { label: 'Scenario start', offsetDays: -60, approximate: true, display: 'sw-legends', swYear: 22, swDay: 6 } } },
         chat: [{ name: 'Player', is_user: true, mes: 'I rest.', sc_message_id: 'old-user' },
             { name: 'Narrator', is_user: false, mes: previous, sc_message_id: 'old-narrator' },
             { name: 'Player', is_user: true, mes: 'I wait until morning.', sc_message_id: 'new-user' },
@@ -36,6 +36,7 @@ test('next morning continues the preceding L0 calendar and its epoch is passed t
     await runtime.summarizeNow();
     assert.equal(sentContext.current.gameDay, 1); assert.equal(sentContext.current.hour, 22);
     assert.equal(sentContext.anchor.offsetDays, -60);
+    assert.equal(sentContext.profile.daysPerWeek, 5); assert.equal(sentContext.profile.daysPerStandardMonth, 35);
     const result = runtime.snapshot().calendar;
     assert.equal(result.now.gameDay, 2); assert.equal(result.now.period, 'morning');
     assert.equal(result.now.hourKnown, false); assert.equal(result.now.anchorDay, -59);
