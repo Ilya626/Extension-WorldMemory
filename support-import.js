@@ -1,6 +1,7 @@
 import { OWNER, compactRevision, packetSignature } from './memory.js';
 import { archiveSnapshot } from './archive-store.js';
 import { rebindKnowledgeIdentities } from './knowledge-runtime.js';
+import { unpackCardBackup } from './card-transfer.js';
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const copy = value => structuredClone(value);
@@ -9,6 +10,71 @@ const baseName = name => name.replace(/\s+Import_\(\d+\)$/i, '').trim();
 const nativeName = name => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/[. ]+$/, '').trim();
 const attemptRevision = packet => compactRevision([packetSignature(packet),
     packet.memoryMetadata?.wiDiff || packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+
+/** Inspect content after selection; do not hide files based on their extension. */
+export async function readSupportFile(file, { convertCharacterBook } = {}) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const png = [137, 80, 78, 71, 13, 10, 26, 10].every((value, i) => bytes[i] === value);
+    const decoder = new TextDecoder();
+    let card, cover;
+    if (png) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), raster = [bytes.subarray(0, 8)];
+        let v2, v3, ended = false;
+        for (let offset = 8; offset + 12 <= bytes.length;) {
+            const length = view.getUint32(offset), end = offset + length + 12;
+            if (end > bytes.length) fail('PNG обрезан: данные карточки не импортированы.');
+            const type = decoder.decode(bytes.subarray(offset + 4, offset + 8));
+            let cardChunk = false;
+            if (type === 'tEXt') {
+                const data = bytes.subarray(offset + 8, end - 4), separator = data.indexOf(0);
+                const key = separator < 0 ? '' : decoder.decode(data.subarray(0, separator)).toLowerCase();
+                if (key === 'chara' || key === 'ccv3') {
+                    cardChunk = true;
+                    if (key === 'ccv3') v3 = data.subarray(separator + 1); else v2 = data.subarray(separator + 1);
+                }
+            }
+            if (!cardChunk) raster.push(bytes.subarray(offset, end));
+            offset = end;
+            if (type === 'IEND') { ended = true; break; }
+        }
+        if (!ended || (!v3 && !v2)) fail('В PNG нет карточки персонажа ST. Выберите оригинальный PNG-файл карточки или полный экспорт JSON.');
+        try {
+            const binary = atob(decoder.decode(v3 || v2));
+            card = JSON.parse(decoder.decode(Uint8Array.from(binary, character => character.charCodeAt(0))));
+        } catch { fail('Не удалось прочитать данные карточки внутри PNG.'); }
+        // Only the raster is carried as cover; embedded snapshots are not duplicated.
+        cover = new Blob(raster, { type: 'image/png' });
+    } else {
+        let value;
+        try { value = JSON.parse(decoder.decode(bytes)); }
+        catch { fail('Файл не распознан. Нужен PNG карточки с вложенной игрой или полный экспорт JSON.'); }
+        if (value?.format === 'world-memory-support-v1') return value;
+        card = value;
+    }
+    const backup = await unpackCardBackup(card?.data?.extensions?.worldMemoryBackup || card?.extensions?.worldMemoryBackup);
+    if (backup?.format !== 'world-memory-v1' || backup.chat?.format !== 'world-memory-chat-v1'
+        || !Array.isArray(backup.chat.messages) || !backup.state)
+        fail('В карточке нет вложенной полной игры WorldMemory. Обычную карточку импортируйте через ST; для переноса игры нужен PNG с сохранённой игрой или «Экспорт всего» JSON.');
+    const state = backup.state, metadata = copy(backup.chat.metadata || {}), books = {};
+    if (state.book && backup.book?.entries) books[state.book] = backup.book;
+    const author = backup.chat.worldInfo;
+    if (author?.data?.entries) books[author.name || metadata.world_info || state.wiSourceBook || state.book] = author.data;
+    const embedded = card.data?.character_book || card.character_book;
+    const characterBook = card.data?.extensions?.world || card.extensions?.world || state.wiSourceBook || state.book;
+    if (embedded?.entries?.length && characterBook && !books[characterBook] && convertCharacterBook)
+        books[characterBook] = convertCharacterBook(embedded);
+    if (characterBook) {
+        card.data ||= {}; card.data.extensions ||= {};
+        card.data.extensions.world = characterBook;
+    }
+    if (!metadata.world_info && author?.data?.entries) metadata.world_info = author.name || state.wiSourceBook || state.book;
+    // The existing complete-import validator rejects unavailable referenced books.
+    return { format: 'world-memory-support-v1', version: backup.version,
+        chat: { id: state.chatId, messages: backup.chat.messages, metadata }, backup,
+        card: { stored: card, avatar: backup.chat.character?.avatar }, books,
+        worldInfo: { bindings: { character: characterBook, chat: metadata.world_info } },
+        cover: cover ? { blob: cover } : null };
+}
 
 // Only installation pointers are rewritten. Source text, responses, entry content,
 // source IDs and revision evidence keep their original values.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.24 — 2026-11-05 — PNG and JSON in Import everything
+
+- Remove the file-picker extension filter. Detect the selected file by its content and explain unsupported or incomplete files before native writes.
+- Import a PNG character with its embedded complete game through the same separate-copy flow as a complete JSON export, preserving its raster, chat, archive, skeleton and WI journal.
+
 ## 0.5.23 — 2026-11-05 — preserve imported WI mode
 
 - A chat with a saved DIFF journal keeps that mode independently of the installation's global toggle. Do not mix legacy WI replacements into a restored journal.

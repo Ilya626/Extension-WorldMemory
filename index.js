@@ -19,7 +19,7 @@ import { populateProfileDropdown } from './vendor/summaryception/connectionutil.
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
 import { collectSupportBundle } from './support-export.js';
-import { prepareSupportImport, rebindCompleteBackup } from './support-import.js';
+import { prepareSupportImport, rebindCompleteBackup, readSupportFile } from './support-import.js';
 import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
 import { usesWIDiffs } from './wi-diff.js';
 import { parseModelJson } from './model-json.js';
@@ -1425,7 +1425,7 @@ async function importEverything(file) {
     try {
         const native = await import('/script.js');
         status('Импорт всего: чтение файла и подготовка отдельной копии…');
-        const bundle = JSON.parse(await file.text()); check();
+        const bundle = await readSupportFile(file, { convertCharacterBook: nativeWI.convertCharacterBook }); check();
         await native.getCharacters(); await nativeWI.updateWorldInfoList(); check();
         prepared = prepareSupportImport(bundle, { characterNames: ctx().characters.map(card => card.name),
             avatarNames: ctx().characters.map(card => card.avatar), bookNames: nativeWI.world_names });
@@ -1435,7 +1435,9 @@ async function importEverything(file) {
             prepared.card.extensions.worldMemoryBackup = packed;
         }
         let upload = new Blob([JSON.stringify(prepared.card)], { type: 'application/json' }), format = 'json';
-        if (bundle.cover?.dataUrl) {
+        if (bundle.cover?.blob) {
+            upload = portablePng(await bundle.cover.blob.arrayBuffer(), prepared.card); format = 'png'; check();
+        } else if (bundle.cover?.dataUrl) {
             if (!bundle.cover.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Обложка в экспорте должна быть PNG.');
             const cover = await fetch(bundle.cover.dataUrl); check();
             upload = portablePng(await cover.arrayBuffer(), prepared.card); format = 'png'; check();
