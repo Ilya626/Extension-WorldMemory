@@ -6,7 +6,11 @@ export function portableBackup(input) {
         delete backup.chat.metadata.worldMemoryCardImport;
         delete backup.chat.metadata.world_info;
     }
-    if (backup.chat?.worldInfo) delete backup.chat.worldInfo.name;
+    // A different chat lorebook is a second data namespace. Its name lets the
+    // complete importer keep it separate from the primary memory book.
+    if (backup.chat?.worldInfo && (!backup.chat.worldInfo.name
+        || [backup.state?.book, backup.state?.wiSourceBook].includes(backup.chat.worldInfo.name)))
+        delete backup.chat.worldInfo.name;
     return backup;
 }
 

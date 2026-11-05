@@ -23,6 +23,7 @@ import { prepareSupportImport, rebindCompleteBackup, readSupportFile } from './s
 import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
 import { usesWIDiffs } from './wi-diff.js';
 import { parseModelJson } from './model-json.js';
+import { installWIImport } from './wi-import.js';
 
 const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
@@ -2019,6 +2020,7 @@ async function init() {
         if (cap > 0) s.wiActivationTokens = cap;
     }
     $('#extensions_settings2').append(await ctx().renderExtensionTemplateAsync('third-party/Extension-WorldMemory', 'settings', {}));
+    installWIImport({ ctx, nativeWI });
     getArchive();
     if (await claimArchiveRuntime()) return;
     archiveRuntime = installArchiveRuntime({ ctx,
