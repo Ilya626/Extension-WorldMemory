@@ -1429,11 +1429,10 @@ async function importEverything(file) {
         await native.getCharacters(); await nativeWI.updateWorldInfoList(); check();
         prepared = prepareSupportImport(bundle, { characterNames: ctx().characters.map(card => card.name),
             avatarNames: ctx().characters.map(card => card.avatar), bookNames: nativeWI.world_names });
-        if (prepared.backup) {
-            const packed = await packCardBackup(prepared.backup); check();
-            prepared.card.data.extensions.worldMemoryBackup = packed;
-            prepared.card.extensions.worldMemoryBackup = packed;
-        }
+        // The complete state is saved below in the receiving chat. Re-embedding
+        // its duplicate backup here sends megabytes through ST's per-character
+        // PNG decoder and can exhaust the server heap before the chat is saved.
+        // Native export builds the portable full-game snapshot in the browser.
         let upload = new Blob([JSON.stringify(prepared.card)], { type: 'application/json' }), format = 'json';
         if (bundle.cover?.blob) {
             upload = portablePng(await bundle.cover.blob.arrayBuffer(), prepared.card); format = 'png'; check();
