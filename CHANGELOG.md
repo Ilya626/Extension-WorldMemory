@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.27 — 2026-11-05 — timeline metadata and request diagnostics
+
+- Return source-linked dates, elapsed time and actual player locations with the same L0 response for WorldAtlas's calendar and route. Invalid timeline metadata preserves L0.
+- Resolve the full import lineage when suppressing ancestral WI copies and exporting the current game's book bindings.
+- Include the last completed native game request in Export everything, with exact messages, model and a separate local estimate. Provider usage/request ID stay unknown when ST does not expose them; connection keys/headers are omitted. Diagnostics are session-only and do not observe subsequent server/provider transformations.
+
 ## 0.5.24 — 2026-11-05 — PNG and JSON in Import everything
 
 - Remove the file-picker extension filter. Detect the selected file by its content and explain unsupported or incomplete files before native writes.

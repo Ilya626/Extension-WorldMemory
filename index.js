@@ -19,11 +19,12 @@ import { populateProfileDropdown } from './vendor/summaryception/connectionutil.
 import { restoreAutomaticGhosts } from './vendor/summaryception/context-control.js';
 import { portableCard, portablePng, packCardBackup, unpackCardBackup } from './card-transfer.js';
 import { collectSupportBundle } from './support-export.js';
-import { prepareSupportImport, rebindCompleteBackup, readSupportFile } from './support-import.js';
+import { prepareSupportImport, rebindCompleteBackup, readSupportFile, importedBookBindings, filterImportedBookEntries } from './support-import.js';
 import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
 import { usesWIDiffs } from './wi-diff.js';
 import { parseModelJson } from './model-json.js';
 import { installWIImport } from './wi-import.js';
+import { installPromptDiagnostics } from './prompt-diagnostics.js';
 
 const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundaries: false, awarenessGraph: false, alwaysMain: true, language: 'auto', targetTokens: 160,
     detailTokens: 4000, referenceTokens: 6000, responseTokens: 0, position: 4, depth: 2,
@@ -37,7 +38,7 @@ const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundarie
     summaryLanguage: 'en', summaryCustomLanguage: '', summarizerWorldInfo: true, summarizerWorldInfoPercent: 20,
     injectionPosition: 0, injectionDepth: 1, injectionRole: 0, injectionScan: false, injectionTemplate: '[Earlier history]\n{{summary}}' };
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
-let history, archiveRuntime, semanticWI, knowledgeRuntime, wiDiffRuntime;
+let history, archiveRuntime, semanticWI, knowledgeRuntime, wiDiffRuntime, promptDiagnostics;
 let nativeReferenceScope = null;
 let updateAuthorBook = null;
 let restoringCardGame = false;
@@ -351,12 +352,7 @@ function syncMainNames(book) {
 async function injectBook(payload) {
     // Imported copies use their own books even if an original is still globally
     // selected. Keep the user's global selection unchanged for every other chat.
-    const importedBooks = ctx().chatMetadata.worldMemoryImport?.books;
-    if (importedBooks) for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
-        const entries = payload[key];
-        if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry =>
-            !Object.hasOwn(importedBooks, entry.world) || importedBooks[entry.world] === entry.world));
-    }
+    filterImportedBookEntries(payload, ctx().chatMetadata.worldMemoryImport);
     if (getSummaryWorldInfoSources() !== null) return;
     const memory = state();
     if (!settings().enabled || !memory) return;
@@ -1527,7 +1523,7 @@ async function exportEverything() {
                 .flatMap(row => row.extraBooks || []) } };
         // Export the books this imported chat actually uses, including copies of
         // globally selected originals that are suppressed in its native scan.
-        const importedBooks = metadata.worldMemoryImport?.books || {};
+        const importedBooks = importedBookBindings(metadata.worldMemoryImport);
         for (const [key, value] of Object.entries(worldInfo.bindings)) worldInfo.bindings[key] = Array.isArray(value)
             ? value.map(name => importedBooks[name] || name) : importedBooks[value] || value;
         for (const key of ['world_info_depth', 'world_info_budget', 'world_info_budget_cap', 'world_info_recursive',
@@ -1548,6 +1544,7 @@ async function exportEverything() {
             inspections: { prompts: () => archiveRuntime.inspectPrompts(), history: () => history.inspect(),
                 semanticWI: () => semanticWI.inspect(), knowledge: () => knowledgeRuntime.inspect(),
                 contextBudget: () => lastContextStatistics, nativePromptSize: () => nativePromptSize,
+                lastGameRequest: () => promptDiagnostics.inspect(),
                 wiSize: () => wiSize, lastNativeWIScan: () => lastNativeWIScan,
                 ui: () => Object.fromEntries(['wm_status', 'wm_wi_problem', 'wm_saved_wi_status', 'wm_prompt_size', 'wm_coverage_summary']
                     .map(id => [id, document.getElementById(id)?.textContent || ''])) },
@@ -2031,6 +2028,7 @@ async function init() {
     wiDiffRuntime = createWIDiffRuntime({ ctx, snapshot: options => archiveRuntime.snapshot(options),
         getBook, saveBook, initializeEntry, saveState });
     history = installHistory({ ctx, settings, state, saveState, status, bridge });
+    promptDiagnostics = installPromptDiagnostics({ ctx });
     semanticWI = createSemanticWIRuntime({ ctx, settings, embeddings: history.embeddings,
         sourceQueries: getSummaryWorldInfoSources, sourceSignal: getSummaryWorldInfoSignal, onUpdate: renderWIStatus });
     knowledgeRuntime = createKnowledgeRuntime({ ctx, settings, snapshot: () => archiveRuntime.snapshot(),

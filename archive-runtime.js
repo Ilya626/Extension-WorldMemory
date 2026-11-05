@@ -8,6 +8,7 @@ import { stripReasoningBlocks, requireModelOutput, getModelOutputIssue } from '.
 import { metadataSources, readMemoryMetadata, memoryTextRevision, MEMORY_METADATA_INSTRUCTION } from './vendor/summaryception/memory-metadata.js';
 import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget, chatWorldInfo } from './vendor/summaryception/world-info-context.js';
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
+import { TIMELINE_INSTRUCTION } from './timeline-sidecar.js';
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
@@ -223,7 +224,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     function l0System() {
         return [config().summarizerSystemPrompt || DEFAULT_SYSTEM, CONTINUITY, MEMORY_ROLES, languageInstruction(),
             'This is stage 1: write the complete L0 prose, followed by its story_spine. Do not emit memory_metadata, search facts or WI JSON; those are prepared separately from the saved L0 and the same originals.',
-            STORY_SPINE_INSTRUCTION].join('\n\n');
+            STORY_SPINE_INSTRUCTION, TIMELINE_INSTRUCTION].join('\n\n');
     }
     function metadataSystem(wiSystemPrompt, knowledgeActive = false) {
         return [MEMORY_METADATA_INSTRUCTION, MEMORY_ROLES, languageInstruction(), wiSystemPrompt,
@@ -285,6 +286,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         requireModelOutput(text);
         if (parsedSpine.storySpine && parsedSpine.warning) warn(parsedSpine.warning);
         const detail = { ...response, text, annotationStatus: 'pending', annotationError: null,
+            timeline: parsedSpine.timeline ? { ...parsedSpine.timeline, textRevision: memoryTextRevision(text),
+                sourceFingerprints: fingerprints(owner, sources), sourceStatus: 'linked' } : null,
+            timelineError: parsedSpine.timelineError || (!parsedSpine.storySpine ? 'Timeline tail unavailable; L0 is kept.' : null),
             storySpine: parsedSpine.storySpine ? { ...parsedSpine.storySpine, textRevision: memoryTextRevision(text),
                 sourceFingerprints: fingerprints(owner, sources), sourceStatus: 'linked' } : null,
             storySpineError: parsedSpine.warning || null,
@@ -604,6 +608,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             guard(owner);
             putPacket(owner.archive, { ...record, text: value, tokenCount, tokenCountSource: `estimated: ${tokenCounterStatus(owner.context).estimator}`, manual: true,
                 tokenCountOrigin: 'manual-tokenizer', memoryMetadata: null, annotationStatus: 'pending', annotationError: null,
+                timeline: null, timelineError: 'Saved L0 was edited; timeline needs explicit refresh.',
                 storySpine: null, storySpineError: 'Saved L0 text was edited. Manual text remains authoritative.' });
             await persist(owner, 'edited', id);
             status('Text saved. Source links are unchanged; prepare search metadata when ready.');

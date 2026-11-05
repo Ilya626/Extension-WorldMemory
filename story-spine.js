@@ -1,5 +1,6 @@
 // Reader chronology only. Retrieval never indexes or requires this structure.
 import { hash } from './history.js';
+import { readTimeline } from './timeline-sidecar.js';
 
 export const STORY_SPINE_INSTRUCTION = `After the complete L0 prose append exactly one <story_spine> JSON block:
 {"text":"a short chronological outline of this entire new L0 packet"}
@@ -38,7 +39,7 @@ export function storySpineSources(sources, options = {}) {
 export function readStorySpine(value, sources, { backfill = false, savedText = '' } = {}) {
     const response = String(value || ''), start = response.indexOf('<story_spine>');
     const text = backfill ? null : (start < 0 ? response : response.slice(0, start)).trim();
-    const result = { text, storySpine: null, warning: '' };
+    const result = { text, storySpine: null, warning: '', timeline: null, timelineError: null };
     const match = start < 0 ? null : /^<story_spine>\s*([\s\S]*?)\s*<\/story_spine>\s*$/.exec(response.slice(start));
     let data, formatRepair = null;
     try {
@@ -56,6 +57,7 @@ export function readStorySpine(value, sources, { backfill = false, savedText = '
             formatRepair = openText === json ? 'missing-json-closer' : 'xml-text-closer';
             result.warning = 'Story outline JSON closer was missing; its exact text was recovered from the complete story_spine block.';
         }
+        if (!backfill) Object.assign(result, readTimeline(data?.timeline, sources, text));
         if (typeof data?.text === 'string') {
             if (!data.text.trim() || !sources.length) throw new Error('Story outline and its source membership must be nonempty.');
             const sourceSpans = sources.flatMap(source => source.sourceSpans || []);

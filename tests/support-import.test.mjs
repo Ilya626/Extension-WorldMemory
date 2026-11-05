@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareSupportImport, rebindCompleteBackup } from '../support-import.js';
+import { prepareSupportImport, rebindCompleteBackup, filterImportedBookEntries } from '../support-import.js';
 import { archiveSnapshot, sourceFingerprint } from '../archive-store.js';
 import { compactRevision, packetSignature } from '../memory.js';
 import { buildKnowledgeContext } from '../knowledge-runtime.js';
@@ -102,4 +102,23 @@ test('invalid export fails before publication and leaves original objects and AP
     assert.deepEqual(bundle, before); assert.deepEqual(api, originalAPI);
     assert.throws(() => prepareSupportImport({ ...exported(), chat: { messages: [{ broken: true }] } }), /complete chat/);
     assert.throws(() => prepareSupportImport({ format: 'another-format' }), /WorldMemory-all/);
+});
+
+test('repeated assembly after two imports excludes ancestral books without accumulating entries', () => {
+    const bundle = exported(), first = prepareSupportImport(bundle, { owner: 'owner-1' });
+    const roundtrip = { ...bundle, card: { stored: first.card }, books: first.books,
+        backup: first.backup, chat: { ...bundle.chat, metadata: first.metadata },
+        worldInfo: { bindings: { global: [first.metadata.worldMemory.book], chat: first.metadata.worldMemory.book } } };
+    const second = prepareSupportImport(roundtrip, { characterNames: [first.name], bookNames: Object.keys(first.books), owner: 'owner-2' });
+    const current = second.metadata.worldMemory.book;
+    const saved = ['History', first.metadata.worldMemory.book, current, 'Unrelated'].map(world => ({ world, uid: 0, content: 'Saved WI.' }));
+    const original = structuredClone(saved);
+    for (let assembly = 0; assembly < 2; assembly++) {
+        const payload = { globalLore: structuredClone(saved), characterLore: [], chatLore: [], personaLore: [] };
+        filterImportedBookEntries(payload, second.metadata.worldMemoryImport);
+        filterImportedBookEntries(payload, second.metadata.worldMemoryImport);
+        assert.deepEqual(payload.globalLore.map(entry => entry.world), [current, 'Unrelated']);
+        assert.equal(payload.globalLore.map(entry => entry.content).join('\n').length, 19);
+    }
+    assert.deepEqual(saved, original);
 });

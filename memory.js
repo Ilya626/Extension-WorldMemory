@@ -1,5 +1,5 @@
 import { parseModelJson } from './model-json.js';
-export const VERSION = '0.5.26';
+export const VERSION = '0.5.27';
 export const OWNER = 'worldMemory';
 export const TYPES = ['character', 'place', 'object', 'organization', 'lore'];
 export const normalize = text => String(text || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');

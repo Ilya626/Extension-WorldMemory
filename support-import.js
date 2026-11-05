@@ -11,6 +11,29 @@ const nativeName = name => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/[
 const attemptRevision = packet => compactRevision([packetSignature(packet),
     packet.memoryMetadata?.wiDiff || packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
 
+// A roundtrip maps the immediately previous copy. Older globally selected
+// originals still belong to the same lineage and must resolve to this copy.
+export function importedBookBindings(provenance) {
+    const bindings = { ...provenance?.books }, current = new Set(Object.values(bindings));
+    for (let previous = provenance?.previousImport; previous; previous = previous.previousImport) {
+        for (const [name, target] of Object.entries(previous.books || {})) {
+            if (!Object.hasOwn(bindings, name) && !current.has(name)
+                && (Object.hasOwn(bindings, target) || current.has(target)))
+                bindings[name] = bindings[target] || target;
+        }
+    }
+    return bindings;
+}
+
+export function filterImportedBookEntries(payload, provenance) {
+    const bindings = importedBookBindings(provenance);
+    for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
+        const entries = payload[key];
+        if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry =>
+            !Object.hasOwn(bindings, entry.world) || bindings[entry.world] === entry.world));
+    }
+}
+
 /** Inspect content after selection; do not hide files based on their extension. */
 export async function readSupportFile(file, { convertCharacterBook } = {}) {
     const bytes = new Uint8Array(await file.arrayBuffer());

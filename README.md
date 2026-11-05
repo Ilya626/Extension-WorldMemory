@@ -12,7 +12,9 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains generated World Info references in the book explicitly selected for this chat.
 
-**0.5.21 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.27 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+
+New L0 summaries return source-linked dates, elapsed time and player locations in the same model response for WorldAtlas's calendar and route. Repeated full-game imports exclude ancestral lorebook copies from the current request. **Экспорт всего** now includes the last completed game request's exact native messages, model and separate local estimate; provider usage and request ID remain **unknown** unless ST exposes them. This diagnostic is kept only in the current page session and excludes connection keys/headers; server/provider transformations are outside its scope.
 
 The main panel now shows history coverage per message range: L0, complete outline, search, prepared WI and its current book-write receipt are separate states. Tap a row for exact sources and actions. **Экспорт всего · один файл** downloads the current chat, card/cover, archive, related books, saved replies, available diagnostics and sanitized settings as one private support file. It makes no model request or WI write; unavailable sections are reported while the rest are preserved.
 
