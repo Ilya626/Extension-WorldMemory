@@ -1182,6 +1182,7 @@ async function renderContextStatistics(run) {
     const fillStatus = { filled: 'выполнен', full: 'запрос уже заполнен', 'no-more-details': 'доступные подробности исчерпаны',
         'no-fitting-details': 'оставшиеся цельные подробности не помещаются', 'history-not-found': 'блок истории изменён или отсутствует в запросе',
         changed: 'сборка изменилась во время добора', unavailable: 'ошибка локальной сборки',
+        'calibration-unavailable': 'приостановлен: измеренная шкала счётчика недоступна; полный скелет и сырой хвост сохранены',
         'retrieval-unavailable': 'подготовка поиска не завершилась', 'unsupported-prompt': 'этот формат запроса не поддерживает добор' };
     const finalAccounted = stats.nativeObservedTokens === null ? null : Math.max(0, stats.nativeObservedTokens - finalProtected);
     const lines = [
@@ -1204,7 +1205,7 @@ async function renderContextStatistics(run) {
     const counterLabel = counter.mode === 'o200k' ? 'локальный o200k: штатный токенизатор недоступен'
         : counter.mode === 'approx' ? 'грубая оценка по длине: локальные токенизаторы недоступны'
             : counter.mode === 'pending' ? 'проверяется' : counter.nativeVerified ? `штатный ${counter.model}, token IDs проверены` : 'счётчик ST';
-    document.getElementById('wm_token_counter_status').textContent = `Счётчик WorldMemory: ${counterLabel}.${counter.calibration.active ? ` Основной контекст: приблизительно x${counter.calibration.factor.toFixed(5)} по одному provider-input замеру.` : ''} Это оценка, не usage провайдера. Внутреннее обрезание и WI-сканирование ST используют свой счётчик и могут отличаться.`;
+    document.getElementById('wm_token_counter_status').textContent = `Счётчик WorldMemory: ${counterLabel}.${counter.calibration.active ? ` Основной контекст: приблизительно x${counter.calibration.factor.toFixed(5)} по одному provider-input замеру.` : counter.calibration.sample ? ' Измеренная шкала недоступна: добор подробностей приостановлен; локальные числа не переведены в provider input.' : ''} Это оценка, не usage провайдера. Внутреннее обрезание и WI-сканирование ST используют свой счётчик и могут отличаться.`;
     renderContextCalibration(counter);
 }
 
@@ -1219,7 +1220,7 @@ function renderContextCalibration(counter = contextCounterStatus(ctx())) {
     }
     label.textContent = !scope ? 'Выберите Chat Completion подключение и модель.'
         : `${scope.model} · ${scope.endpoint || scope.source}. ${active ? `Применено x${factor.toFixed(5)} по 1 замеру: приблизительная оценка, зависящая от текста.`
-            : state === 'local-counter-changed' ? 'Калибровка приостановлена: локальный токенизатор изменился; нужен новый парный замер.' : 'Калибровка не применена.'}`;
+            : state === 'local-counter-changed' ? 'Локальный счётчик изменился: калибровка и добор подробностей приостановлены. Скелет и хвост сохранены. Следующий ход повторит проверку исходного счётчика; замер сохранён.' : 'Калибровка не применена.'}`;
     for (const id of ['wm_calibration_apply', 'wm_calibration_proxy_last', 'wm_calibration_reset'])
         document.getElementById(id).disabled = !scope || busy || archiveRuntime?.isBusy();
 }

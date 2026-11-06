@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.31 — 2026-11-06 — retain calibrated budgeting across turns
+
+- A local tokenizer fallback no longer lets the next game request fill optional history in an uncalibrated scale when a saved sample is temporarily unavailable. Keep the complete outline, raw tail, archive and manual settings; show the interrupted calibration explicitly.
+- Recheck the measured counter at the next game preparation and resume its saved calibration when it recovers. Preserve a valid calibration measured on a fallback counter. Restart history selection if its counting scale changes during preparation.
+- No model request is added; provider input remains an approximation unless actual usage is exposed.
+
 ## 0.5.30 — 2026-11-06 — portable Atlas calendar continuation
 
 - Read an active WorldAtlas0.4.2 route/calendar import as the calendar baseline for the next L0: preserve its epoch, accumulated time, uncertainty and unit profile without replacing the archive or manual calendar settings.

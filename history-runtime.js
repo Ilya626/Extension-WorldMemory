@@ -45,6 +45,11 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
     async function finalizeHistory(data) {
         const prompt = data?.prompt, current = ctx(), s = settings(), work = recovery;
         if (!s.enabled || s.injectionPosition === -1 || !prepared) return;
+        const calibration = tokenCounterStatus(current).calibration;
+        if (calibration.sample && !calibration.active) {
+            prepared = { ...prepared, finalTopUp: { status: 'calibration-unavailable', reason: tokenCounterStatus(current).warning } };
+            return;
+        }
         if (!Array.isArray(prompt) || !work) {
             prepared = { ...prepared, finalTopUp: { status: !Array.isArray(prompt) ? 'unsupported-prompt' : 'retrieval-unavailable' } };
             return;
@@ -110,10 +115,10 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         }
         delete message.extra.token_count; invalidate();
     }
-    async function prepare(processedChat, _size, _abort, type) {
+    async function prepare(processedChat, _size, _abort, type, scaleRestart = false) {
         injection.capture(processedChat); syncHints(type !== 'quiet');
         if (!settings().enabled || settings().injectionPosition === -1 || type === 'quiet' || !snapshot()) { invalidate(); return; }
-        await prepareTokenCounter(ctx());
+        await prepareTokenCounter(ctx(), { refresh: !scaleRestart });
         if (chunkTokenizer !== tokenizerKey()) {
             // Keep reusable vectors; only the token-counted window boundaries
             // belong to the old game tokenizer/model.
@@ -121,6 +126,8 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         }
         controller?.abort();
         recovery = null;
+        prepared = null; injection.refresh();
+        const countingScale = tokenCounterKey(ctx());
         const view = snapshot(), metadata = ctx().chatMetadata, snapshotKey = key(view), run = ++serial;
         const nodes = archiveHistoryNodes(view), storyNodes = archiveStoryNodes(view), query = semanticWIQuery(view.chat);
         if (!storyNodes.length) { prepared = null; injection.refresh(); return; }
@@ -137,12 +144,21 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
         const activity = () => { clearTimeout(timeout); timeout = setTimeout(() => abort.abort(), 120000); };
         try {
             const template = settings().injectionTemplate || '{{summary}}';
-            const selectionOptions = { storyNodes, nativeOverlap, targetTokens: settings().historyMaxTokens ?? 8000,
+            const calibration = tokenCounterStatus(ctx()).calibration;
+            const calibrationUnavailable = calibration.sample && !calibration.active;
+            const selectionOptions = { storyNodes, nativeOverlap, targetTokens: calibrationUnavailable ? 0 : settings().historyMaxTokens ?? 8000,
                 countTokens, format: text => template.replace('{{summary}}', () => text) };
             // Reader chronology does not depend on retrieval or its network availability.
             baseline = await selectHistory(nodes, [], selectionOptions);
-            if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
+            if (!isCurrent()) return;
+            if (tokenCounterKey(ctx()) !== countingScale) return prepare(processedChat, _size, _abort, type, true);
+            if (key(snapshot()) !== snapshotKey) return;
             prepared = { key: snapshotKey, ...baseline }; injection.refresh();
+            if (calibrationUnavailable) {
+                prepared.warning = [baseline.warning, tokenCounterStatus(ctx()).warning].filter(Boolean).join(' ');
+                if (output) output.textContent = prepared.warning;
+                return;
+            }
             activity();
             if (globalThis.RussianWIForms?.getStatus?.().enabled && globalThis.RussianWIForms?.getLemmas) {
                 try { lemmas = await globalThis.RussianWIForms.getLemmas([...new Set([query, ...nodes.flatMap(n => n.sources.map(s => s.text))].flatMap(terms))]); }
@@ -178,7 +194,9 @@ export function installHistory({ ctx, settings, state, saveState, status, bridge
             }
             const diagnostics = ranked.diagnostics;
             const assembled = await selectHistory(nodes, ranked, selectionOptions);
-            if (!isCurrent() || key(snapshot()) !== snapshotKey) return;
+            if (!isCurrent()) return;
+            if (tokenCounterKey(ctx()) !== countingScale) return prepare(processedChat, _size, _abort, type, true);
+            if (key(snapshot()) !== snapshotKey) return;
             prepared = { key: snapshotKey, text: assembled.text, tokens: assembled.tokens, selected: assembled.selected,
                 blocks: assembled.blocks, baselineTokens: assembled.baselineTokens, spineInfo: assembled.spineInfo,
                 warning: [assembled.warning, warning].filter(Boolean).join(' '), diagnostics };

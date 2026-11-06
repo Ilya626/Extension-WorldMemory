@@ -51,8 +51,16 @@ function useMode(state, mode, reason = '') {
 }
 
 /** Probe once per model/settings scope. A broken tokenizer never blocks generation. */
-export async function prepareTokenCounter(context) {
+export async function prepareTokenCounter(context, { refresh = false } = {}) {
     const current = contextOf(context), state = stateOf(current);
+    // A transient local failure must not disable a saved calibration for the
+    // rest of the page session. Retry health once at the next game preparation,
+    // not for every text field or during an in-progress scale restart.
+    if (refresh && state.mode !== 'native' && state.pending && !contextCalibration(current, tokenCounterKey(current)).active) {
+        const pending = state.pending;
+        await pending;
+        if (state.pending === pending && state.mode !== 'native' && !contextCalibration(current, tokenCounterKey(current)).active) state.pending = null;
+    }
     if (state.pending) { await state.pending; return tokenCounterStatus(current); }
     state.pending = (async () => {
         // TC keeps ST's selected counter. Non-browser consumers can supply their own counter.
@@ -83,8 +91,11 @@ export const tokenCounterKey = context => tokenCounterStatus(context).key;
 export function contextCounterStatus(context) {
     const current = contextOf(context), base = tokenCounterStatus(current), calibration = contextCalibration(current, base.key);
     const factor = calibration.factor;
-    return { ...base, calibration, proxyEstimator: base.estimator, replyFramingTokens: Math.ceil(3 * factor),
-        estimator: calibration.active ? `${base.estimator}; main-context calibration x${factor.toFixed(5)} from ONE provider-input sample; approximate` : base.estimator,
+    const unavailable = calibration.sample && !calibration.active;
+    const warning = unavailable ? 'Saved main-context calibration does not match the local counter. Optional history details are paused until the measured scale recovers or a matching sample is applied.' : '';
+    return { ...base, calibration, warning: [base.warning, warning].filter(Boolean).join(' '), proxyEstimator: base.estimator, replyFramingTokens: Math.ceil(3 * factor),
+        estimator: calibration.active ? `${base.estimator}; main-context calibration x${factor.toFixed(5)} from ONE provider-input sample; approximate`
+            : unavailable ? `${base.estimator}; saved main-context calibration unavailable; optional history details paused` : base.estimator,
         key: calibration.scope ? `${base.key}|${calibration.scope.key}|${factor}` : base.key };
 }
 export const contextCounterKey = context => contextCounterStatus(context).key;
