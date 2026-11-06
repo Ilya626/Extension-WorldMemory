@@ -14,7 +14,8 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains generated World Info references in the book explicitly selected for this chat.
 
-**0.5.29 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.30 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+WorldAtlas0.4.2 portable route/calendar imports also seed the next L0 calendar context: the imported epoch, accumulated time and calendar unit profile are read without rewriting the archive or manual calendar settings. New local packets after the import boundary continue that clock; undoing/removing the Atlas import restores the prior calendar authority. A first local packet that crosses the import moment keeps new source-confirmed locations, while its inseparable elapsed time remains explicitly unknown.
 
 New L0 summaries return source-linked dates, elapsed time and player locations in the same model response for WorldAtlas's calendar and route. Repeated full-game imports exclude ancestral lorebook copies from the current request. **Экспорт всего** now includes the last completed game request's exact native messages, model and separate local estimate; provider usage and request ID remain **unknown** unless ST exposes them. This diagnostic is kept only in the current page session and excludes connection keys/headers; server/provider transformations are outside its scope.
 

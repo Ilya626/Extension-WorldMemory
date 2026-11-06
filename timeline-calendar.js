@@ -2,8 +2,12 @@
 // Epochs are per chat. No mapping to the computer's current date is implied.
 import { hash } from './history.js';
 const shortRevision = value => { let h = 2166136261; for (const c of String(value)) h = Math.imul(h ^ c.codePointAt(0), 16777619); return (h >>> 0).toString(16); };
+const importedState = metadata => Object.values(metadata.worldAtlas?.tracking || {}).find(state =>
+    state.importedSnapshot?.format === 'world-atlas-route' && Array.isArray(state.importedSnapshot.calendar?.rows)
+    && Number.isFinite(state.importedSnapshot.calendar?.now?.elapsedHours) && state.importedSnapshot.calendar.now.elapsedHours >= 0);
 export function calendarAnchor(metadata = {}) {
-    return metadata.worldMemory?.calendarAnchor || Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.calendarStart)?.calendarStart || {};
+    return importedState(metadata)?.importedSnapshot.calendarStart || metadata.worldMemory?.calendarAnchor
+        || Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.calendarStart)?.calendarStart || {};
 }
 export function calendarProfile(anchor = {}) {
     return anchor.display === 'sw-legends' ? {
@@ -22,10 +26,21 @@ export function calendarTime(value) {
     return { dayOffset: value.dayOffset, hour: value.hour ?? null, period: value.period || null,
         precision: value.precision === 'exact' ? 'exact' : 'approximate' };
 }
-export function resolveCalendar(packets, metadata = {}, overrideAnchor) {
-    const anchor = overrideAnchor || calendarAnchor(metadata), rows = [], resolved = {};
-    const atlas = Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.events || state.timing) || {};
-    let hours = 0, incomplete = false, approximate = Boolean(anchor.approximate), hourKnown = true, period = null;
+export function resolveCalendar(packets, metadata = {}, overrideAnchor, chat = null) {
+    const imported = importedState(metadata), carry = imported?.importedSnapshot;
+    const anchor = overrideAnchor || calendarAnchor(metadata), rows = carry ? structuredClone(carry.calendar.rows) : [], resolved = {};
+    const atlas = imported || Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.events || state.timing) || {};
+    const attachment = carry?.binding?.attachment;
+    let boundary = attachment?.index ?? null;
+    if (carry && Array.isArray(chat) && attachment) {
+        const hashes = chat.map(message => shortRevision(`${Boolean(message.is_user)}:${String(message.mes || '').replace(/\r\n/g, '\n').trim()}`)), matches = [];
+        const wanted = attachment.hashes || [];
+        for (let end = wanted.length - 1; wanted.length && end < hashes.length; end++)
+            if (wanted.every((value, i) => hashes[end - wanted.length + 1 + i] === value)) matches.push(end);
+        boundary = attachment.empty ? -1 : matches.length === 1 ? matches[0] : null;
+    }
+    let hours = carry?.calendar.now.elapsedHours || 0, incomplete = Boolean(carry?.calendar.now.incomplete || (carry && boundary === null)),
+        approximate = Boolean(anchor.approximate || carry?.calendar.now.approximate), hourKnown = carry ? carry.calendar.now.hourKnown !== false : true, period = carry?.calendar.now.period || null;
     const stamp = () => {
         const day = Math.floor(hours / 24), clock = { elapsedHours: hours, gameDay: day + 1, hour: Math.floor(hours % 24), minute: Math.floor((hours * 60) % 60),
             hourKnown, period, approximate, incomplete, anchorLabel: anchor.label || 'начало игры',
@@ -41,12 +56,22 @@ export function resolveCalendar(packets, metadata = {}, overrideAnchor) {
         else { hours = start; incomplete = true; hourKnown = false; }
         return stamp();
     };
-    for (const packet of packets.filter(packet => !packet.stale && !packet.deleted && packet.orderKnown).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
+    let overlap = false;
+    for (const packet of packets.filter(packet => !packet.stale && !packet.deleted && packet.orderKnown
+        && (!carry || (boundary !== null && Math.max(packet.order, packet.turnRange?.[1] ?? -1, ...(packet.sources || []).map(source => source.index)) > boundary)))
+        .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
         const source = `l0:${packet.id}`, rev = shortRevision(packet.text), startHours = hours, start = stamp();
         const timeline = packet.timeline?.textRevision === (packet.textRevision || hash(packet.text)) ? packet.timeline : null;
         const timing = atlas.timing?.[source]?.revision === rev ? atlas.timing[source] : null;
-        const info = timeline || timing;
-        const events = timeline?.locations || (atlas.events || []).filter(event => event.source === source && event.revision === rev);
+        const partial = carry && packet.order <= boundary;
+        overlap ||= Boolean(partial);
+        const info = partial ? { elapsedHours: null, timePrecision: 'unknown' } : timeline || timing;
+        let events = timeline?.locations || (atlas.events || []).filter(event => event.source === source && event.revision === rev);
+        if (partial) events = events.flatMap(event => {
+            const indices = (event.sourceIds || []).map(id => packet.sources?.find(source => source.id === id)?.index).filter(Number.isFinite);
+            if (indices.length && indices.every(index => index <= boundary)) return [];
+            return [{ ...event, offsetHours: null, time: null, boundaryUncertain: !indices.length || indices.some(index => index <= boundary) }];
+        });
         const entry = { start, locations: [] }; let latestEventHours = startHours;
         const baseline = { incomplete, approximate, hourKnown, period };
         for (const [offset, event] of events.entries()) {
@@ -63,7 +88,10 @@ export function resolveCalendar(packets, metadata = {}, overrideAnchor) {
         if (!events.length) rows.push({ source, index: packet.order, offset: -1, date: info?.date, place: null, clock: entry.end });
         resolved[packet.id] = entry;
     }
-    return { anchor, profile: calendarProfile(anchor), now: stamp(), packets: resolved, rows };
+    const now = stamp();
+    if (carry && boundary === null) now.importedHistorical = true;
+    return { anchor, profile: calendarProfile(anchor), now, packets: resolved, rows,
+        ...(carry ? { imported: true, importBoundary: boundary, importOverlap: overlap } : {}) };
 }
 export function formatCalendar(clock, anchor = {}) {
     const prefix = clock.incomplete ? 'Не ранее: ≈ ' : clock.approximate ? '≈ ' : '';

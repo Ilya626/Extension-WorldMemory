@@ -53,7 +53,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         const context = ctx();
         for (const message of context.chat || []) sourceId(message);
         const value = archiveSnapshot(getArchive(), context, options);
-        value.calendar = resolveCalendar(value.packets, context.chatMetadata);
+        value.calendar = resolveCalendar(value.packets, context.chatMetadata, undefined, context.chat);
         return value;
     };
     const historyText = () => {
@@ -270,9 +270,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         if (!template.includes('{{story_txt}}')) prompt += `\n\n<new_sources>\n${story}\n</new_sources>`;
         const before = Math.min(...sources.map(source => source.index));
         const priorPackets = snapshot().packets.filter(packet => packet.order < before && packet.id !== existing?.id);
-        const calendar = resolveCalendar(priorPackets, ctx().chatMetadata);
+        const calendar = resolveCalendar(priorPackets, ctx().chatMetadata, undefined, ctx().chat);
         prompt += `\n\n<calendar_context>\n${JSON.stringify({ anchor: calendar.anchor, profile: calendar.profile, current: calendar.now,
-            rule: 'Continue this fixed epoch and accumulated date. Calendar dayOffset is relative to this current calendar day.' })}\n</calendar_context>`;
+            rule: 'Continue this fixed epoch and accumulated date. Calendar dayOffset is relative to this current calendar day. If current.importedHistorical is true, the imported boundary is no longer confirmed: preserve unknown time instead of treating this historical date as the current scene.' })}\n</calendar_context>`;
         if (existing !== null) prompt += `\n\n<existing_summary>\n${existing}\n</existing_summary>\nRefine the complete existing_summary against exactly new_sources. Retain all its supported details, recover omissions and correct unsupported claims. This is a complete replacement, not a delta; do not drop facts as already known from previous_l0.`;
         if (s.summarizerWorldInfo && chatWorldInfo(ctx())) {
             status('Scanning native World Info for the source packet and previous L0.');
