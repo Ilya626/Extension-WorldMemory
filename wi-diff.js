@@ -199,7 +199,7 @@ export function applyWIDiffResponse(state, wire, options = {}) {
 /** Bind accepted new subjects to allocated native UIDs. Does not allocate or edit book entries. */
 export function bindWIDiffUIDs(state, mapping) {
     validateState(state);
-    const next = clone(state), used = new Map();
+    const next = clone(state), used = new Map(), pendingCurrent = state.pending?.baseHead === state.confirmed.head;
     const all = [...next.confirmed.claims, ...list(next.pending?.add)];
     for (const claim of all) if (validUID(claim.uid)) used.set(claim.uid, claim.subject);
     for (const [subject, uid] of Object.entries(mapping || {})) {
@@ -212,6 +212,6 @@ export function bindWIDiffUIDs(state, mapping) {
         }
     }
     next.confirmed.head = head(next.confirmed.claims);
-    if (next.pending) next.pending.baseHead = next.confirmed.head;
+    if (next.pending && pendingCurrent) next.pending.baseHead = next.confirmed.head;
     return next;
 }

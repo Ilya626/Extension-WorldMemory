@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.32 — 2026-11-07 — repair missing earlier WI without discarding later proposals
+
+- Prepare missing earlier WI against a separate source-matched prefix. Save its proposal separately and require explicit review before merging accepted changes into confirmed WI; preserve the later proposal and review it against the new base before accepting it.
+- A failed WI-reference preparation no longer blocks valid search and knowledge metadata. Keep saved L0, original messages, compatible existing WI and protected manual entries.
+- Preserve prefix/review state across complete imports. Retry an already accepted saved review after a native write failure without applying its changes twice, and update the original packet's completion status.
+- Missing stage-2 responses cannot be recovered by local replay: preparing those records still requires an explicit model request. No background recovery call is added.
+
 ## 0.5.31 — 2026-11-06 — retain calibrated budgeting across turns
 
 - A local tokenizer fallback no longer lets the next game request fill optional history in an uncalibrated scale when a saved sample is temporarily unavailable. Keep the complete outline, raw tail, archive and manual settings; show the interrupted calibration explicitly.

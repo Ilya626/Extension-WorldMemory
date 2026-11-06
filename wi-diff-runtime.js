@@ -1,4 +1,4 @@
-import { OWNER, entryMeta, fingerprint, markGenerated, signature } from './memory.js';
+import { OWNER, entryMeta, fingerprint, markGenerated, signature, compactRevision } from './memory.js';
 import { sourceFingerprint } from './archive-store.js';
 import { memoryTextRevision } from './vendor/summaryception/memory-metadata.js';
 import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, bindWIDiffUIDs } from './wi-diff.js';
@@ -13,6 +13,9 @@ const idOf = message => message.sc_message_id || message.extra?.sc_message_id ||
 const manual = entry => Boolean(entryMeta(entry)?.manual || entryMeta(entry)?.lastGenerated
     && entryMeta(entry).lastGenerated !== fingerprint(entry));
 const flat = records => records.flatMap(record => record.claims);
+// Installation owner/book/branch pointers are rebound by complete import.
+const backfillRevision = state => compactRevision(state?.backfillPending
+    ? [state.backfillPending.state.confirmed, state.backfillPending.state.pending, state.backfillPending.state.receipts] : null);
 
 export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initializeEntry, saveState }) {
     const memory = () => ctx().chatMetadata?.[OWNER];
@@ -44,7 +47,7 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if (!validRefs(refs, run.sources)) error('request originals changed or disappeared; saved response was kept');
     };
 
-    async function prepare({ sourceIds = [], packetId, reviewOnly = false } = {}) {
+    async function prepare({ sourceIds = [], packetId, reviewOnly = false, backfillReview = false } = {}) {
         const book = await getBook(true), run = capture();
         if (!run.memory?.owner || !run.memory.book || !run.memory.wiSourceBook) error('choose a chat WI book first');
         if (!sourceIds.length || new Set(sourceIds).size !== sourceIds.length
@@ -61,6 +64,11 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
             run.memory.wiDiffState = state; await saveState(); guard(run);
         }
         assertBinding(run, { ...binding(run), owner: state.owner, book: state.book, branch: state.branch });
+        const liveState = state;
+        if (backfillReview) {
+            if (!state.backfillPending) error('no earlier WI proposal awaits review');
+            state = state.backfillPending.state;
+        }
         const blocked = protectedUIDs(book, state.owner);
         // A rejected last packet may be retried after its call accepted the
         // PREVIOUS proposal. Those claims still come exclusively from earlier
@@ -69,7 +77,32 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
             && state.lastReview.through === through && state.confirmed.claims.every(claim =>
                 claim.acceptedThrough <= through && Object.keys(claim.sources).every(id => run.sources[id]?.index <= before));
         const cutoff = retryRejected ? through : before;
-        const projected = getWIDiffContext(state, { sources: run.sources, cutoff, protectedUIDs: blocked });
+        let projected = getWIDiffContext(state, { sources: run.sources, cutoff, protectedUIDs: blocked });
+        const historical = !reviewOnly && (state.pending?.through > cutoff
+            || state.confirmed.claims.some(claim => claim.acceptedThrough > cutoff));
+        if (historical) {
+            if (liveState.backfillPending && liveState.backfillPending.state.pending?.packetId !== packetId)
+                error('review the saved earlier WI proposal before preparing another one');
+            if (projected.stale || getWIDiffContext(state, { sources: run.sources }).pendingStale)
+                error('source/base changed; reconcile saved WI before preparing an earlier diff');
+            const prefixRecords = clone(projected.records);
+            // The historical view contains active claims only. A retirement
+            // that happened later is not part of this prefix's state.
+            for (const claim of flat(prefixRecords)) delete claim.retired;
+            state = createWIDiffState({ ...binding(run), records: prefixRecords });
+            projected = getWIDiffContext(state, { sources: run.sources, cutoff, protectedUIDs: blocked });
+        }
+        if (!historical && !reviewOnly && liveState.backfillPending)
+            error('review the saved earlier WI proposal before preparing the next diff');
+        // A backfill review may change the confirmed head while the later
+        // proposal is still pending. Only a fresh explicit review sees that new
+        // base; an old model response is never silently accepted against it.
+        const rebaseReview = reviewOnly && !backfillReview && state.pending
+            && state.pending.baseHead !== state.confirmed.head;
+        if (rebaseReview) {
+            state = clone(state); state.pending.baseHead = state.confirmed.head;
+            projected = getWIDiffContext(state, { sources: run.sources, cutoff, protectedUIDs: blocked });
+        }
         if (projected.stale || projected.pendingStale) error('source/base changed; reconcile saved WI before preparing another diff');
         if (state.confirmed.claims.some(claim => claim.acceptedThrough > cutoff
             || Object.keys(claim.sources).some(id => run.sources[id]?.index > before)))
@@ -82,7 +115,13 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         const proposalId = crypto.randomUUID();
         const stamp = { version: 1, ...binding(run), diff: true, baseHead: state.confirmed.head,
             proposalId, packetId, through, contextThrough: through, sourceMessageIds: [...sourceIds],
-            sourceFingerprints: refs, reviewOnly, packetTextRevision: record ? memoryTextRevision(record.text) : null };
+            sourceFingerprints: refs, reviewOnly, packetTextRevision: record ? memoryTextRevision(record.text) : null,
+            ...(historical ? { historical: true, prefixState: state } : {}),
+            ...(backfillReview ? { backfillReview: true } : {}),
+            ...(rebaseReview ? { rebaseReview: true } : {}),
+            ...((backfillReview || rebaseReview) ? { reviewedPacketId: state.pending?.packetId } : {}),
+            ...((historical || backfillReview || rebaseReview) ? { liveHead: liveState.confirmed.head,
+                livePending: compactRevision(liveState.pending), backfillRevision: backfillRevision(liveState) } : {}) };
         const proposed = new Map();
         for (const claim of projected.pending?.add || []) {
             if (!proposed.has(claim.subject)) proposed.set(claim.subject, { uid: claim.uid, subject: claim.subject,
@@ -176,23 +215,71 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         const book = await getBook(); guard(run); assertBinding(run, stamp);
         if (run.memory.wiDiffState !== state) error('confirmed state changed while reading the native book');
         const fresh = capture(); checkRefs(stamp.sourceFingerprints, fresh);
-        const previous = state.pending;
-        const next = applyWIDiffResponse(state, wire, { ...binding(run), baseHead: stamp.baseHead,
+        if ((stamp.backfillReview || stamp.rebaseReview) && state.receipts?.[stamp.proposalId]) {
+            const revision = compactRevision([wire, stamp.packetId || packet.id, stamp.through, stamp.sourceMessageIds]);
+            if (state.receipts[stamp.proposalId] !== revision) error('proposal ID reused for a different response');
+            if (wire.review?.decision === 'accept') await materialize();
+            guard(run);
+            return { status: run.memory.wiDiffState.pending ? 'proposed' : 'applied',
+                acceptedPacketId: wire.review?.decision === 'accept' ? stamp.reviewedPacketId : null };
+        }
+        if (stamp.historical && state.backfillPending?.state.receipts?.[stamp.proposalId]) {
+            const revision = compactRevision([wire, stamp.packetId || packet.id, stamp.through, stamp.sourceMessageIds]);
+            if (state.backfillPending.state.receipts[stamp.proposalId] !== revision) error('proposal ID reused for a different response');
+            return { status: 'proposed', acceptedPacketId: null };
+        }
+        if (stamp.historical || stamp.backfillReview || stamp.rebaseReview) {
+            if (state.confirmed.head !== stamp.liveHead || compactRevision(state.pending) !== stamp.livePending
+                || backfillRevision(state) !== stamp.backfillRevision)
+                error('WI changed after this prefix was prepared; saved response was kept');
+        }
+        let base = stamp.historical ? stamp.prefixState : stamp.backfillReview ? state.backfillPending?.state : state;
+        if (!base) error('saved earlier WI proposal is missing');
+        if (stamp.rebaseReview) { base = clone(base); base.pending.baseHead = base.confirmed.head; }
+        const previous = base.pending;
+        let next = applyWIDiffResponse(base, wire, { ...binding(run), baseHead: stamp.baseHead,
             packetId: stamp.packetId || packet.id, through: stamp.through, proposalId: stamp.proposalId,
             sourceMessageIds: stamp.sourceMessageIds, sources: fresh.sources,
             protectedUIDs: protectedUIDs(book, state.owner),
-            allowedUIDs: getWIDiffContext(state, { sources: fresh.sources, cutoff: stamp.through }).records
+            allowedUIDs: getWIDiffContext(base, { sources: fresh.sources, cutoff: stamp.through }).records
                 .map(record => record.uid).filter(uid => uid !== null) });
+        if (stamp.historical) {
+            const historicalState = next;
+            next = clone(state);
+            if (historicalState.pending) next.backfillPending = { state: historicalState };
+            // An empty historical response needs no review and changes no live WI.
+            else delete next.backfillPending;
+        } else if (stamp.backfillReview) {
+            const reviewed = next; next = clone(state);
+            if (wire.review?.decision === 'accept') {
+                const original = new Map(base.confirmed.claims.map(claim => [claim.id, claim]));
+                for (const claim of reviewed.confirmed.claims) {
+                    const old = original.get(claim.id), live = next.confirmed.claims.find(item => item.id === claim.id);
+                    if (!old) { if (live) error('earlier claim ID already exists'); next.confirmed.claims.push(clone(claim)); }
+                    else if (claim.retired && !old.retired) {
+                        if (!live || live.revision !== old.revision || live.retired) error('earlier removal target changed');
+                        live.retired = clone(claim.retired);
+                    }
+                }
+                next.confirmed = createWIDiffState({ ...binding(run), records: [{ claims: next.confirmed.claims }] }).confirmed;
+                // Keep the later proposal and its OLD base. Its next explicit
+                // review must read the newly confirmed evidence before rebasing.
+            }
+            next.lastReview = clone(reviewed.lastReview);
+            next.receipts[stamp.proposalId] = reviewed.receipts[stamp.proposalId];
+            delete next.backfillPending;
+        }
         run.memory.wiDiffState = next; await saveState(); guard(run);
         if (wire.review?.decision === 'accept') await materialize(); guard(run);
-        return { status: next.pending ? 'proposed' : 'applied',
+        return { status: (stamp.historical ? next.backfillPending : next.pending) ? 'proposed' : 'applied',
             acceptedPacketId: previous?.id === wire.review?.proposalId && wire.review?.decision === 'accept' ? previous.packetId : null };
     }
 
     async function reviewContext() {
-        const pending = memory()?.wiDiffState?.pending;
+        const state = memory()?.wiDiffState, backfillReview = Boolean(state?.backfillPending);
+        const pending = backfillReview ? state.backfillPending.state.pending : state?.pending;
         if (!pending) error('nothing awaits review');
-        const prepared = await prepare({ sourceIds: Object.keys(pending.sources), packetId: `review:${pending.id}`, reviewOnly: true });
+        const prepared = await prepare({ sourceIds: Object.keys(pending.sources), packetId: `review:${pending.id}`, reviewOnly: true, backfillReview });
         return { ...prepared, packet: { id: prepared.stamp.packetId, sourceMessageIds: [...prepared.stamp.sourceMessageIds],
             text: '', memoryMetadata: { wiContext: prepared.stamp } } };
     }

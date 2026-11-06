@@ -57,7 +57,7 @@ function diffStatus(memory = state()) {
     const diff = memory?.wiDiffState;
     if (!diff) return diffMode(memory) ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
     const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
-    return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : ' Непроверенных предложений нет.'}`;
+    return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.backfillPending ? ' Восстановление раннего блока ждёт явной проверки; позднее предложение сохранено.' : ''}${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : diff.backfillPending ? '' : ' Непроверенных предложений нет.'}`;
 }
 function wiCoverage(memory) {
     const packets = Object.values(memory?.archive?.records || {}).filter(packet => !packet.deleted);
@@ -800,7 +800,7 @@ function recordDiffOutcome(packet, result, previous) {
 async function reviewLastWIDiff({ savedOnly = false } = {}) {
     if (busy || !wiDiffRuntime || bridge().isBusy()) return;
     const metadata = ctx().chatMetadata, memory = state();
-    if (!memory?.wiDiffState?.pending && !memory?.wiDiffReview?.responseText) { status('Нет предложения WI для проверки.'); return; }
+    if (!memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending && !memory?.wiDiffReview?.responseText) { status('Нет предложения WI для проверки.'); return; }
     clearTimeout(timer); busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = requireChatWorldInfo(ctx());
@@ -821,11 +821,12 @@ async function reviewLastWIDiff({ savedOnly = false } = {}) {
         if (!saved?.responseText) throw new Error('Нет сохранённого ответа для повторного разбора.');
         const parsed = parseModelJson(saved.responseText), wire = parsed.wiDiff || parsed;
         saved.packet.memoryMetadata.wiDiff = wire;
-        const previous = memory.wiDiffState.pending;
-        await wiDiffRuntime.consume(saved.packet); unchanged(metadata);
+        const previous = saved.packet.memoryMetadata.wiContext.backfillReview
+            ? memory.wiDiffState.backfillPending?.state.pending : memory.wiDiffState.pending;
+        const result = await wiDiffRuntime.consume(saved.packet); unchanged(metadata);
         // The synthetic review packet is a receipt, not an archive/history record.
-        if (previous) {
-            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === previous.packetId);
+        if (previous || result.acceptedPacketId) {
+            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.acceptedPacketId));
             if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
         }
         saved.status = 'applied'; saved.error = null; await saveState(); unchanged(metadata);
@@ -889,7 +890,7 @@ function renderBusy() {
     $('#wm_export_all, #wm_import_all').prop('disabled', working);
     $('#wm_wi_diffs').prop('checked', diffMode()).prop('disabled', working || Boolean(state()?.wiDiffState));
     $('#wm_update').prop('disabled', working || diffMode());
-    $('#wm_review_diff').prop('disabled', working || !state()?.wiDiffState?.pending);
+    $('#wm_review_diff').prop('disabled', working || !(state()?.wiDiffState?.pending || state()?.wiDiffState?.backfillPending));
     $('#wm_retry_diff_review').prop('disabled', working || !state()?.wiDiffReview?.responseText || state()?.wiDiffReview?.status === 'applied');
     $('#wm_coverage_stop').prop('hidden', !working);
     const activity = document.getElementById('wm_coverage_working');
@@ -1268,7 +1269,7 @@ async function render() {
     renderWIProblem(memory);
     renderCoverage();
     document.getElementById('wm_diff_status').textContent = diffStatus(memory);
-    document.getElementById('wm_review_diff').hidden = !diffMode(memory) && !memory?.wiDiffState?.pending;
+    document.getElementById('wm_review_diff').hidden = !diffMode(memory) && !memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending;
     document.getElementById('wm_retry_diff_review').hidden = !memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied';
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];

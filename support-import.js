@@ -131,9 +131,11 @@ export function rebindCompleteBackup(backup, { owner, chatId, bookName, messages
     const originals = new Map(Object.entries(archive.sources || {}).map(([id, source]) => [idOf(source) || id, source]));
     for (const source of backup.chat?.messages || []) if (idOf(source)) originals.set(idOf(source), source);
     const required = new Set(Object.values(archive.records).flatMap(record => record.sourceMessageIds || []));
-    for (const claim of saved.wiDiffState?.confirmed?.claims || [])
-        for (const id of [...Object.keys(claim.sources || {}), ...Object.keys(claim.retired?.sources || {})]) required.add(id);
-    for (const id of Object.keys(saved.wiDiffState?.pending?.sources || {})) required.add(id);
+    for (const journal of [saved.wiDiffState, saved.wiDiffState?.backfillPending?.state]) {
+        for (const claim of journal?.confirmed?.claims || [])
+            for (const id of [...Object.keys(claim.sources || {}), ...Object.keys(claim.retired?.sources || {})]) required.add(id);
+        for (const id of Object.keys(journal?.pending?.sources || {})) required.add(id);
+    }
     if (backup.chat?.messages) for (const source of backup.chat.messages) if (idOf(source)) required.add(idOf(source));
     if (!required.size) return null;
     const receiving = new Map();

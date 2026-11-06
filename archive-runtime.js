@@ -253,8 +253,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             guard(owner); return value;
         } catch (error) {
             guard(owner); warn(`WI references unavailable: ${error.message}. L0 can still be saved.`);
-            if (config().wiDiffs && chatWorldInfo(ctx())) throw error;
-            return { failed: true };
+            return { failed: true, error: error.message };
         }
     }
     async function generateL0(owner, sources, previous, { existing = null } = {}) {
@@ -342,7 +341,8 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                     owner.responsesDirty = true;
                 }
             }
-            const wi = cached ? (cached.wiRequested ? { context: {}, stamp: cached.wiContext } : null)
+            const wi = cached ? (cached.wiError ? { failed: true, error: cached.wiError }
+                : cached.wiRequested ? { context: {}, stamp: cached.wiContext } : null)
                 : await references(owner, sources, record.text, record.id);
             let knowledge = null, cachedKnowledgeChanged = false;
             if (config().knowledgeBoundaries && sources.length && prepareKnowledge) try {
@@ -365,10 +365,13 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (JSON.stringify(readPacket(owner.archive, record.id)) !== before) throw new Error('Saved L0 changed during annotation. Response not applied.');
             received = cached || { text: response.text, usage: response.usage || null, tokenCount: response.tokenCount ?? null,
                 requestId: requestTrace.findLast(item => item.metadata === owner.metadata && item.trace.stage === 'metadata')?.trace.id || null,
-                textRevision: memoryTextRevision(record.text), sourceFingerprints, wiRequested: Boolean(wi?.context),
+                textRevision: memoryTextRevision(record.text), sourceFingerprints, wiRequested: Boolean(wi?.context || wi?.failed),
+                ...(wi?.failed ? { wiError: wi.error } : {}),
                 wiContext: wi?.stamp || null, savedAt: Date.now(), systemPrompt: system, userPrompt: prompt,
                 knowledgeCharacters: JSON.stringify(knowledge?.knowledge_characters || []) };
             const parsed = readMemoryMetadata(response.text, localSources, { backfill: true, extractiveFacts: true });
+            if (wi?.failed) parsed.warning = [parsed.warning,
+                `WI references unavailable: ${wi.error}. Valid search and knowledge metadata were kept; WI was not changed.`].filter(Boolean).join(' ');
             if (cachedKnowledgeChanged) parsed.warning = [parsed.warning,
                 'Character knowledge mapping changed; saved hints were kept and old actor handles were not reassigned.'].filter(Boolean).join(' ');
             if (parsed.metadata?.wi) try { readSummaryWI(parsed.metadata.wi); }
@@ -410,8 +413,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 sourceStatus: sources.length ? 'linked' : 'summary-only', producer: 'worldmemory-archive-annotation-v2-source-index',
                 ...(wi ? { wiRequested: true, wiContext: wi.stamp || null, wiStatus: parsed.metadata.wiDiff ? 'proposed' : parsed.metadata.wi ? 'generated' : 'missing' } : {}) };
             const previous = record.memoryMetadata;
-            if (previous?.textRevision === metadata.textRevision
-                && JSON.stringify(previous.sourceFingerprints) === JSON.stringify(sourceFingerprints)) {
+            const previousCurrent = previous?.textRevision === metadata.textRevision
+                && JSON.stringify(previous.sourceFingerprints) === JSON.stringify(sourceFingerprints);
+            if (previousCurrent) {
                 if (!parsed.fields?.lprime) metadata.lprime = previous.lprime;
                 if (!parsed.fields?.facts) metadata.facts = previous.facts;
                 if (wi && !metadata.wi && !metadata.wiDiff && previous.wi && previous.wiContext?.diff === wi.stamp?.diff && previous.wiContext?.owner === wi.stamp?.owner
@@ -422,6 +426,10 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (!sources.length || !wi?.context || (wi.stamp?.authorBook !== undefined && wi.stamp.authorBook !== chatWorldInfo(ctx()))) {
                 delete metadata.wi; delete metadata.wiDiff;
                 if (wi) metadata.wiStatus = 'blocked';
+                if (wi?.failed && previousCurrent) {
+                    for (const key of ['wi', 'wiDiff', 'wiContext', 'wiStatus', 'previousWI'])
+                        if (previous[key] !== undefined) metadata[key] = previous[key];
+                }
             }
             if (boundaries.warnings.length || awareness.warnings.length) warn([...boundaries.warnings, ...awareness.warnings].join(' '));
             if (metadata.wiDiff && previous?.wi) metadata.previousWI = previous.wi;
