@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.30 — 2026-11-06 — portable Atlas calendar continuation
+
+- Read an active WorldAtlas0.4.2 route/calendar import as the calendar baseline for the next L0: preserve its epoch, accumulated time, uncertainty and unit profile without replacing the archive or manual calendar settings.
+- Follow the matched source boundary or the explicitly attached local import moment. Retain confirmed new locations from an overlapping first packet, while its inseparable elapsed time remains unknown in subsequent calculations.
+- Use the same imported baseline in the archive snapshot and L0 calendar context. Undo/removing the Atlas import restores the previous calendar authority. No model request is added by importing or reading the calendar.
+- Document the separate small-file Atlas import, mobile picker and required WM0.5.30+/Atlas0.4.2+ versions. Private route files remain outside the public repositories.
+
 ## 0.5.29 — 2026-11-06 — optional main-context calibration
 
 - Apply/reset one measured WM-proxy/provider-input pair for the current connection, profile, known actual model and local counting scale. One sample remains an approximation; no provider/model is preconfigured and no model request is added.
