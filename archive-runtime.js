@@ -249,10 +249,13 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         if (!sources.length || !prepareReferences) return null;
         try {
             const value = await wait(Promise.resolve(prepareReferences({ sourceIds: sources.map(source => source.id),
-                existingSummary, packetId, signal: owner.controller.signal })), owner);
+                existingSummary, packetId, signal: owner.controller.signal,
+                request: (system, prompt, options = {}) => transport(owner, system, prompt, options) })), owner);
             guard(owner); return value;
         } catch (error) {
-            guard(owner); warn(`WI references unavailable: ${error.message}. L0 can still be saved.`);
+            guard(owner);
+            if (error.wiReviewFailed) throw error;
+            warn(`WI references unavailable: ${error.message}. L0 can still be saved.`);
             return { failed: true, error: error.message };
         }
     }

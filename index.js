@@ -2,6 +2,7 @@ import { VERSION, OWNER, SYSTEM, normalize, signature, entryMeta, fingerprint, p
     parseResult, ownedEntries, retainedFacts, detectManual, markGenerated, formatContent,
     readSummaryWI, evidenceRevision, compactRevision, retainedContent, SUMMARY_WI_SYSTEM } from './memory.js';
 import { installHistory } from './history-runtime.js';
+import { createMetadataRecovery } from './metadata-recovery.js';
 import { createArchive, importLegacyArchive, readArchive } from './archive-store.js';
 import { archiveHistoryNodes, archiveStoryNodes, selectHistory } from './history-selection.js';
 import { contextPolicy, recommendContextBudget, contextStatistics } from './context-budget.js';
@@ -39,7 +40,7 @@ const defaults = { enabled: true, auto: true, wiDiffs: false, knowledgeBoundarie
     summaryLanguage: 'en', summaryCustomLanguage: '', summarizerWorldInfo: true, summarizerWorldInfoPercent: 20,
     injectionPosition: 0, injectionDepth: 1, injectionRole: 0, injectionScan: false, injectionTemplate: '[Earlier history]\n{{summary}}' };
 let nativeWI, controller = null, busy = false, timer = null, currentUpdate = null;
-let history, archiveRuntime, semanticWI, knowledgeRuntime, wiDiffRuntime, promptDiagnostics;
+let history, archiveRuntime, semanticWI, knowledgeRuntime, wiDiffRuntime, promptDiagnostics, metadataRecovery;
 let nativeReferenceScope = null;
 let updateAuthorBook = null;
 let restoringCardGame = false;
@@ -57,7 +58,7 @@ function diffStatus(memory = state()) {
     const diff = memory?.wiDiffState;
     if (!diff) return diffMode(memory) ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
     const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
-    return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.backfillPending ? ' Восстановление раннего блока ждёт явной проверки; позднее предложение сохранено.' : ''}${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : diff.backfillPending ? '' : ' Непроверенных предложений нет.'}`;
+    return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.backfillPending ? ' Раннее предложение проверяется перед следующим блоком; позднее предложение сохранено.' : ''}${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : diff.backfillPending ? '' : ' Непроверенных предложений нет.'}`;
 }
 function wiCoverage(memory) {
     const packets = Object.values(memory?.archive?.records || {}).filter(packet => !packet.deleted);
@@ -457,7 +458,7 @@ function orderFor(entry, packets) {
     const indices = ids.flatMap(id => packets.find(packet => packet.id === id)?.sources.map(source => source.index) || []);
     return indices.length ? Math.max(...indices) : null;
 }
-async function prepareSummaryContext({ sourceIds = [], existingSummary = null, signal } = {}) {
+async function prepareSummaryContext({ sourceIds = [], existingSummary = null, signal, request } = {}) {
     if (!settings().enabled || !settings().auto || !bridge()?.snapshot) return null;
     if (diffMode()) {
         signal?.throwIfAborted();
@@ -467,6 +468,19 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
         const failed = Object.entries(state()?.wiPackets || {}).find(([id, item]) => id !== packet?.id
             && item.mode === 'diff' && item.status === 'error');
         if (failed) throw new Error(`Предыдущий DIFF не обработан: ${failed[1].message}`);
+        // A restored earlier proposal must progress before the ordinary next-block
+        // review. Use the current archive writer/transport instead of re-entering it.
+        const firstSource = packet?.sources?.length ? Math.min(...packet.sources.map(source => source.index)) : null;
+        if (request && firstSource !== null) try {
+            const earlier = state()?.wiDiffState?.backfillPending?.state.pending;
+            if (earlier && firstSource > earlier.through) await requestWIDiffReview(request, signal);
+            const diff = state()?.wiDiffState;
+            if (diff?.pending && firstSource > diff.pending.through && diff.pending.baseHead !== diff.confirmed.head)
+                await requestWIDiffReview(request, signal);
+        } catch (error) {
+            error.wiReviewFailed = true;
+            throw error;
+        }
         const prepared = await wiDiffRuntime.prepare({ sourceIds, packetId: packet?.id });
         signal?.throwIfAborted(); return prepared;
     }
@@ -797,6 +811,46 @@ function recordDiffOutcome(packet, result, previous) {
             status: memory.wiDiffState.lastReview.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
     }
 }
+async function requestWIDiffReview(request, signal, savedOnly = false) {
+    const metadata = ctx().chatMetadata, memory = state();
+    const guard = () => { signal?.throwIfAborted(); unchanged(metadata); };
+    guard();
+    try {
+        let saved = savedOnly ? memory.wiDiffReview : null;
+        if (!saved) {
+            const prepared = await wiDiffRuntime.reviewContext(); guard();
+            const prompt = JSON.stringify({ task: 'Explicitly review the last pending WI proposal. Return one memory_metadata block with wiDiff only; no new proposal.',
+                world_memory_context: prepared.context, new_sources: [] });
+            saved = memory.wiDiffReview = { packet: prepared.packet, systemPrompt: prepared.systemPrompt,
+                userPrompt: prompt, status: 'requesting', responseText: '' };
+            await saveState(); guard();
+            status('Проверка последнего предложения WI · один запрос к модели.');
+            const response = await request(prepared.systemPrompt, prompt, { signal,
+                stage: 'wi-review', packetId: prepared.packet.id, responseTokens: settings().responseTokens });
+            guard(); saved.responseText = response.text; saved.status = 'received';
+            await saveState(); guard();
+        }
+        if (!saved?.responseText) throw new Error('Нет сохранённого ответа для повторного разбора.');
+        const parsed = parseModelJson(saved.responseText), wire = parsed.wiDiff || parsed;
+        saved.packet.memoryMetadata.wiDiff = wire;
+        const previous = saved.packet.memoryMetadata.wiContext.backfillReview
+            ? memory.wiDiffState.backfillPending?.state.pending : memory.wiDiffState.pending;
+        const result = await wiDiffRuntime.consume(saved.packet); guard();
+        // The synthetic review packet is a receipt, not an archive/history record.
+        if (previous || result.acceptedPacketId) {
+            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.acceptedPacketId));
+            if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+        }
+        saved.status = 'applied'; saved.error = null; await saveState(); guard();
+        history.changed(); status(`${wire.review.decision === 'accept' ? 'Предложение WI подтверждено и записано.' : 'Предложение отклонено; прежний WI сохранён.'} ${diffStatus()}`);
+        return { result, wire };
+    } catch (error) {
+        if (ctx().chatMetadata === metadata && state() === memory && memory.wiDiffReview) {
+            memory.wiDiffReview.error = error.message; await saveState();
+        }
+        throw error;
+    }
+}
 async function reviewLastWIDiff({ savedOnly = false } = {}) {
     if (busy || !wiDiffRuntime || bridge().isBusy()) return;
     const metadata = ctx().chatMetadata, memory = state();
@@ -804,33 +858,7 @@ async function reviewLastWIDiff({ savedOnly = false } = {}) {
     clearTimeout(timer); busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = requireChatWorldInfo(ctx());
-        let saved = savedOnly ? memory.wiDiffReview : null;
-        if (!saved) {
-            const prepared = await wiDiffRuntime.reviewContext(); unchanged(metadata);
-            const prompt = JSON.stringify({ task: 'Explicitly review the last pending WI proposal. Return one memory_metadata block with wiDiff only; no new proposal.',
-                world_memory_context: prepared.context, new_sources: [] });
-            saved = memory.wiDiffReview = { packet: prepared.packet, systemPrompt: prepared.systemPrompt,
-                userPrompt: prompt, status: 'requesting', responseText: '' };
-            await saveState(); unchanged(metadata);
-            status('Проверка последнего предложения WI · один запрос к модели.');
-            const response = await bridge().request(prepared.systemPrompt, prompt, { signal: controller.signal,
-                stage: 'wi-review', packetId: prepared.packet.id, responseTokens: settings().responseTokens });
-            unchanged(metadata); saved.responseText = response.text; saved.status = 'received';
-            await saveState(); unchanged(metadata);
-        }
-        if (!saved?.responseText) throw new Error('Нет сохранённого ответа для повторного разбора.');
-        const parsed = parseModelJson(saved.responseText), wire = parsed.wiDiff || parsed;
-        saved.packet.memoryMetadata.wiDiff = wire;
-        const previous = saved.packet.memoryMetadata.wiContext.backfillReview
-            ? memory.wiDiffState.backfillPending?.state.pending : memory.wiDiffState.pending;
-        const result = await wiDiffRuntime.consume(saved.packet); unchanged(metadata);
-        // The synthetic review packet is a receipt, not an archive/history record.
-        if (previous || result.acceptedPacketId) {
-            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.acceptedPacketId));
-            if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
-        }
-        saved.status = 'applied'; saved.error = null; await saveState(); unchanged(metadata);
-        history.changed(); status(`${wire.review.decision === 'accept' ? 'Предложение WI подтверждено и записано.' : 'Предложение отклонено; прежний WI сохранён.'} ${diffStatus()}`);
+        await requestWIDiffReview((system, prompt, options) => bridge().request(system, prompt, options), controller.signal, savedOnly);
     } catch (error) {
         if (ctx().chatMetadata === metadata && state() === memory && memory.wiDiffReview) {
             memory.wiDiffReview.error = error.message; await saveState();
@@ -883,6 +911,7 @@ function schedule() {
 }
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
+    if (!working) metadataRecovery?.notify();
     $('#wm_update, #wm_retry_saved_wi, #wm_reparse_response, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
@@ -2090,6 +2119,38 @@ async function init() {
         sourceQueries: getSummaryWorldInfoSources, sourceSignal: getSummaryWorldInfoSignal, onUpdate: renderWIStatus });
     knowledgeRuntime = createKnowledgeRuntime({ ctx, settings, snapshot: () => archiveRuntime.snapshot(),
         getBook: () => getBook(), world: () => state()?.book, owner: () => state()?.owner });
+    const recoveryEvents = ctx().eventTypes || ctx().event_types || {};
+    metadataRecovery = createMetadataRecovery({
+        read: () => {
+            const s = settings(), memory = state(), context = ctx();
+            if (!s.enabled || !s.auto || s.pauseSummarization || s.archiveAuto === false
+                || !memory?.book || !chatWorldInfo(context)) return null;
+            const view = archiveRuntime.snapshot({ effective: false });
+            const packets = view.packets.filter(packet => !packet.stale
+                && packet.sourceStatus === 'linked' && (!packet.memoryMetadata?.lprime?.text || !hasSavedWI(packet)));
+            if (!packets.length) return null;
+            const diff = memory.wiDiffState;
+            const inputKey = compactRevision([memory.owner, memory.book, chatWorldInfo(context),
+                view.packets.map(packet => [packet.id, packetSignature(packet)]),
+                s.connectionSource, s.connectionProfileId, s.openaiUrl, s.openaiModel, s.openaiKey,
+                s.ollamaUrl, s.ollamaModel, s.summaryLanguage, s.summarizerSystemPrompt, s.responseTokens,
+                context.mainApi, context.chatCompletionSettings?.chat_completion_source,
+                context.chatCompletionSettings?.custom_url, context.getChatCompletionModel?.(context.chatCompletionSettings),
+                context.extensionSettings.connectionManager?.selectedProfile]);
+            return { inputKey, remaining: packets.length, packetIds: packets.slice(0, 4).map(packet => packet.id),
+                key: compactRevision([inputKey, packets.map(packet => packet.id), diff?.confirmed.head,
+                    diff?.pending?.id, diff?.backfillPending?.state.pending?.id]) };
+        },
+        recover: async ({ packetIds }, signal) => {
+            await archiveRuntime.backfillMemoryMetadata({ packetIds, signal, responseTokens: settings().responseTokens });
+            history.changed(); await renderArchive();
+        },
+        isBusy: () => busy || archiveRuntime.isBusy(), onError: error => status(`Автоподготовка поиска / WI остановлена: ${error.message}`),
+        eventSource: ctx().eventSource, chatChangedEvent: recoveryEvents.CHAT_CHANGED,
+        changedEvents: [recoveryEvents.WORLDINFO_UPDATED, recoveryEvents.CHATCOMPLETION_MODEL_CHANGED,
+            recoveryEvents.CHATCOMPLETION_SOURCE_CHANGED, recoveryEvents.OAI_PRESET_CHANGED_AFTER,
+            'worldmemory:archive-changed']
+    });
     const prepareContext = async (...args) => {
         const results = await Promise.allSettled([history.prepare(...args), semanticWI.prepare(...args)]);
         for (const result of results) if (result.status === 'rejected') {
@@ -2204,7 +2265,7 @@ async function init() {
     $('#wm_coverage_spine').on('click', () => { void backfillSpine(); });
     $('#wm_coverage_stop').on('click', () => { $('#wm_stop').trigger('click'); });
     $('[data-coverage-filter]').on('click', event => { coverageFilter = event.currentTarget.dataset.coverageFilter; renderCoverage(); });
-    $('#wm_stop').on('click', () => { clearTimeout(timer); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy(); });
+    $('#wm_stop').on('click', () => { metadataRecovery.cancel(); clearTimeout(timer); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); renderBusy(); });
     $('#wm_summarize').on('click', () => { void archiveRuntime.summarizeNow().then(renderArchive).catch(error => status(error.message)).finally(renderBusy); });
     $('#wm_clear_embeddings').on('click', async () => {
         if (busy || archiveRuntime.isBusy()) return;
@@ -2276,7 +2337,8 @@ async function init() {
     try {
         if (!await restoreEmbeddedCardGame()) status('Ready. Growing L0 archive; raw tail and recovered-history budgets are separate. No layer transfers.');
     } catch (error) { cardRestoreError(error); }
-    globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
+    metadataRecovery.notify();
+    globalThis.WorldMemory = Object.freeze({ version: VERSION, update: () => update(true), stop: () => { metadataRecovery.cancel(); controller?.abort(); archiveRuntime.stop(); history.stop(); semanticWI.invalidate(); },
         archive: archiveRuntime, summarizeNow: archiveRuntime.summarizeNow, inspectSummaryPrompts: () => archiveRuntime.inspectPrompts(),
         backfillMetadata, prepareSummaryContext, retrySavedWI: () => update(false, true), reviewLastWIDiff, reviewWIDiff: reviewLastWIDiff,
         retrySavedDiffReview: () => reviewLastWIDiff({ savedOnly: true }), inspectWIDiff: () => structuredClone(state()?.wiDiffState || null),

@@ -48,12 +48,21 @@ export function resolveCalendar(packets, metadata = {}, overrideAnchor, chat = n
         clock.label = formatCalendar(clock, anchor); return clock;
     };
     const advance = (start, step, delta, precision) => {
-        if (step) {
+        if (Number.isFinite(delta) && (!step || step.hour === null)) {
+            // dayOffset with an unknown hour is a calendar bucket, not midnight.
+            // Keep the supported duration (and the starting fractional day).
+            hours = start + delta;
+            approximate ||= precision !== 'exact' || Boolean(step && step.precision !== 'exact');
+            if (step) {
+                hourKnown = false;
+                if (Math.floor(hours / 24) !== Math.floor(start / 24) + step.dayOffset) { incomplete = true; period = null; }
+                else period = step.period || (delta === 0 ? period : null);
+            } else if (delta !== 0) period = null;
+        } else if (step) {
             hours = (Math.floor(start / 24) + step.dayOffset) * 24 + (step.hour ?? 0);
             if (hours < start) { incomplete = true; hours = start; }
             hourKnown = step.hour !== null; period = step.period; approximate ||= step.precision !== 'exact';
-        } else if (Number.isFinite(delta)) { hours = start + delta; approximate ||= precision !== 'exact'; period = null; }
-        else { hours = start; incomplete = true; hourKnown = false; }
+        } else { hours = start; incomplete = true; hourKnown = false; }
         return stamp();
     };
     let overlap = false;

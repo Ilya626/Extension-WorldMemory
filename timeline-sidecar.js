@@ -21,25 +21,40 @@ export function readTimeline(value, sources, text) {
         if (elapsedHours !== null && (!Number.isFinite(elapsedHours) || elapsedHours < 0)) throw new Error('Invalid elapsed hours.');
         const timePrecision = value.timePrecision || 'unknown';
         if (!['exact', 'approximate', 'unknown'].includes(timePrecision)) throw new Error('Invalid elapsed-time precision.');
+        const warnings = [];
         let previousOrder = -1, previousOffset = -1, previousHours = -1;
-        const locations = value.locations.map(item => {
-            if (!item?.place?.trim() || !['arrived', 'departed'].includes(item.status) || !Array.isArray(item.src) || item.src.length !== 1)
-                throw new Error('Invalid player location.');
-            const source = byHandle.get(item.src[0]);
-            const offset = source && typeof item.quote === 'string' && item.quote.trim().length >= 8 ? source.text.indexOf(item.quote) : -1;
-            if (!source || source.sourceKind === 'saved-summary' || !(offset >= 0)
-                || source.order < previousOrder || (source.order === previousOrder && offset < previousOffset))
-                throw new Error('Timeline evidence is missing or out of order.');
-            previousOrder = source.order; previousOffset = offset;
-            const span = source.sourceSpans?.[0];
-            const offsetHours = item.offsetHours === undefined ? null : item.offsetHours;
-            if (offsetHours !== null && (!Number.isFinite(offsetHours) || offsetHours < 0 || (elapsedHours !== null && offsetHours > elapsedHours)))
-                throw new Error('Location time is outside its packet.');
-            if (offsetHours !== null && offsetHours < previousHours) throw new Error('Location times are out of order.');
-            if (offsetHours !== null) previousHours = offsetHours;
-            return { place: item.place.trim(), date: dateValue(item.date), offsetHours, time: calendarTime(item.time), status: item.status, quote: item.quote,
-                sourceIds: [source.id], sourceSpans: span ? [{ ...span, start: span.start + offset, end: span.start + offset + item.quote.length }] : [] };
+        const locations = value.locations.flatMap((item, index) => {
+            try {
+                if (!item?.place?.trim() || !['arrived', 'departed'].includes(item.status) || !Array.isArray(item.src) || !item.src.length)
+                    throw new Error('Invalid player location.');
+                // A model can cite several handles for one event. Bind its verbatim
+                // quotation to exactly one of those sources, never another message.
+                const matches = [...new Set(item.src)].map(handle => byHandle.get(handle)).filter(source =>
+                    source && source.sourceKind !== 'saved-summary' && typeof item.quote === 'string'
+                    && item.quote.trim().length >= 8 && source.text.includes(item.quote));
+                const source = matches.length === 1 ? matches[0] : null;
+                const offset = source ? source.text.indexOf(item.quote) : -1;
+                if (!source || source.order < previousOrder || (source.order === previousOrder && offset < previousOffset))
+                    throw new Error('Timeline evidence is missing or out of order.');
+                const span = source.sourceSpans?.[0];
+                const offsetHours = item.offsetHours === undefined ? null : item.offsetHours;
+                if (offsetHours !== null && (!Number.isFinite(offsetHours) || offsetHours < 0 || (elapsedHours !== null && offsetHours > elapsedHours)))
+                    throw new Error('Location time is outside its packet.');
+                if (offsetHours !== null && offsetHours < previousHours) throw new Error('Location times are out of order.');
+                const location = { place: item.place.trim(), date: dateValue(item.date), offsetHours, time: calendarTime(item.time), status: item.status, quote: item.quote,
+                    sourceIds: [source.id], sourceSpans: span ? [{ ...span, start: span.start + offset, end: span.start + offset + item.quote.length }] : [] };
+                previousOrder = source.order; previousOffset = offset;
+                if (offsetHours !== null) previousHours = offsetHours;
+                return [location];
+            } catch (error) {
+                warnings.push(`Location ${index + 1}: ${error.message}`);
+                return [];
+            }
         });
-        return { timeline: { version: 2, textRevision: hash(text), date, elapsedHours, timePrecision, endTime: calendarTime(value.endTime), locations }, timelineError: null };
+        let endTime = null;
+        try { endTime = calendarTime(value.endTime); }
+        catch (error) { warnings.push(error.message); }
+        return { timeline: { version: 2, textRevision: hash(text), date, elapsedHours, timePrecision, endTime, locations },
+            timelineError: warnings.length ? `${warnings.join(' ')} Supported timeline data and L0 are kept.` : null };
     } catch (error) { return { timeline: null, timelineError: `${error.message} L0 is kept.` }; }
 }
