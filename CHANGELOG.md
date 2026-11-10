@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.33 — 2026-11-10 — preserve apostrophized names in history search
+
+- Keep names such as `Дари'Мар` as one history-search term and match the typographic apostrophe spelling `Дари’Мар`.
+- Pair with Russian WI Forms 0.1.8 for whole-name declension and native WI activation. Saved keys and story text are preserved.
+
 ## 0.5.32 — 2026-11-07 — repair missing earlier WI without discarding later proposals
 
 - Prepare missing earlier WI against a separate source-matched prefix. Save its proposal separately and require explicit review before merging accepted changes into confirmed WI; preserve the later proposal and review it against the new base before accepting it.

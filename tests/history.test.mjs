@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hash, revision, splitHint, activeHint, makeGroups, readHistory, historyNodes, candidates, rank, assemble } from '../history.js';
+import { hash, revision, splitHint, activeHint, makeGroups, readHistory, historyNodes, candidates, terms, rank, assemble } from '../history.js';
 
 const countTokens = async text => text.split(/\s+/).filter(Boolean).length;
 const source = (index, text, extra = {}) => ({ id: `m${index}`, index, name: index % 2 ? 'GM' : 'Player', isUser: index % 2 === 0, text, ...extra });
@@ -76,4 +76,13 @@ test('Russian lemmas bridge inflected query and evidence; stale hints never add 
     const altered = structuredClone(p); altered.sources[0].hint = { fingerprint: hash('another reply'), keys: 'UNSUPPORTED_WORD' };
     const nodes = historyNodes({ packets: [altered] }, stored);
     assert.ok(candidates(nodes).every(doc => !doc.search.includes('UNSUPPORTED_WORD')));
+});
+
+test('Dari Mar remains one search term with either apostrophe spelling', () => {
+    const docs = [{ id: 'name', order: 0, text: "Дари'Мар" }];
+    for (const name of ["Дари'Мар", 'Дари’Мар']) {
+        assert.deepEqual(terms(name), ["дари'мар"]);
+        assert.equal(rank(name, docs)[0]?.id, 'name');
+    }
+    assert.deepEqual(rank('Мар', docs), []);
 });

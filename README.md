@@ -14,7 +14,9 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains generated World Info references in the book explicitly selected for this chat.
 
-**0.5.32 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.33 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+
+Names containing an internal apostrophe, such as `Дари'Мар` and `Дари’Мар`, now remain one history-search term. Update **Russian WI Forms to 0.1.8** as well for whole-name forms and native WI activation, then reload SillyTavern. Existing saved keys and story text stay unchanged.
 
 If a local tokenizer failure invalidates a saved calibration, optional history details pause instead of filling the next request in an uncalibrated scale. The complete outline, raw tail and manual settings remain intact. The next turn checks for recovery of the measured counter; a valid calibration made on a fallback counter keeps its measured scale. Calibration remains approximate and does not guarantee a provider input limit.
 WorldAtlas0.4.2 portable route/calendar imports also seed the next L0 calendar context: the imported epoch, accumulated time and calendar unit profile are read without rewriting the archive or manual calendar settings. New local packets after the import boundary continue that clock; undoing/removing the Atlas import restores the prior calendar authority. A first local packet that crosses the import moment keeps new source-confirmed locations, while its inseparable elapsed time remains explicitly unknown.

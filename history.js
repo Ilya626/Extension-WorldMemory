@@ -76,7 +76,7 @@ export function readHistory(text, groups) {
 
 const STOP = new Set('the a an and or to of in on is it was that this for with as at be by he she they you i we his her their not а и или в во на с со по к из за у о об от до но не это я ты он она они мы вы его ее их как что'.split(' '));
 export function terms(text) {
-    return [...new Set((String(text).toLowerCase().replace(/ё/g, 'е').match(/[\p{L}\p{N}]+/gu) || []).filter(w => w.length > 1 && !STOP.has(w)))];
+    return [...new Set((String(text).toLowerCase().replace(/ё/g, 'е').replace(/’/g, "'").match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) || []).filter(w => w.length > 1 && !STOP.has(w)))];
 }
 export function rank(query, documents, lemmas = {}) {
     const expand = text => new Set(terms(text).flatMap(w => [w, ...(lemmas[w] || [])]));
