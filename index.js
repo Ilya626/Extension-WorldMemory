@@ -867,8 +867,11 @@ async function correctPartialWI({ savedOnly = false } = {}) {
         const retryIds = { add: result.issues.filter(i => i.kind === 'add').map(i => corrected.add[i.index]?.id),
             remove: result.issues.filter(i => i.kind === 'remove').map(i => i.id ? corrected.remove.find(x => x.item?.id === i.id)?.id : corrected.remove[i.index]?.id) };
         if (!wire.add.length && !wire.remove.length && rejected.length) {
-            controller.signal.throwIfAborted(); unchanged(metadata); const discarded = await wiDiffRuntime.discardEmptyProposal(packet);
-            controller.signal.throwIfAborted(); unchanged(metadata); result.status = discarded ? 'rejected' : 'proposed';
+            controller.signal.throwIfAborted(); unchanged(metadata); await wiDiffRuntime.discardEmptyProposal(packet);
+            controller.signal.throwIfAborted(); unchanged(metadata);
+            const current = memory.wiDiffState, proposalId = packet.memoryMetadata.wiContext.proposalId;
+            const stillPending = current?.pending?.id === proposalId || current?.backfillPending?.state.pending?.id === proposalId;
+            result.status = stillPending ? 'proposed' : current?.lastReview?.proposalId === proposalId && current.lastReview.decision === 'accept' ? 'applied' : 'rejected';
         }
         const decisions = rejected.map(item => ({ id: item.id, reason: item.reason, item: expected.find(x => x.id === item.id).item }));
         unchanged(metadata);
