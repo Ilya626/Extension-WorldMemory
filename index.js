@@ -58,6 +58,8 @@ function diffStatus(memory = state()) {
     const diff = memory?.wiDiffState;
     if (!diff) return diffMode(memory) ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
     const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
+    const rejected = (diff.reviewHistory?.[diff.lastReview?.proposalId]?.review?.items || diff.lastReview?.items || []).filter(item => item.decision === 'reject');
+    const reviewNote = rejected.length ? ` Review: ${rejected.length} item(s) rejected. ${rejected.map(item => item.reason).join(' | ')}` : '';
     return `DIFF этого чата закреплён сохранённым журналом; глобальная настройка не меняется. Подтверждено тезисов ${count}.${diff.backfillPending ? ' Раннее предложение проверяется перед следующим блоком; позднее предложение сохранено.' : ''}${diff.pending ? ` Последнее предложение: +${diff.pending.add.length} / −${diff.pending.remove.length}; ждёт следующего блока или явной проверки.` : diff.backfillPending ? '' : ' Непроверенных предложений нет.'}`;
 }
 function wiCoverage(memory) {
@@ -65,7 +67,7 @@ function wiCoverage(memory) {
     const prepared = packets.filter(hasSavedWI);
     const empty = prepared.filter(packet => packet.memoryMetadata.wiDiff
         ? !packet.memoryMetadata.wiDiff.add.length && !packet.memoryMetadata.wiDiff.remove.length : !packet.memoryMetadata.wi.updates.length).length;
-    const applied = packets.filter(packet => memory?.wiPackets?.[packet.id]?.status === 'applied').length;
+    const applied = packets.filter(packet => ['applied', 'reviewed-partial'].includes(memory?.wiPackets?.[packet.id]?.status)).length;
     const savedResponses = packets.filter(packet => packet.annotationResponse).length;
     return `WI по сохранённым L0: подготовлено ${prepared.length} / ${packets.length}, из них пустых ${empty}; применено ${applied}. Без результата WI: ${packets.length - prepared.length}.${savedResponses ? ` Ответов для проверки: ${savedResponses}; кнопки повторного разбора и диагностики находятся на основной панели.` : ''}`;
 }
@@ -233,8 +235,8 @@ async function adoptSelectedBook(memory, name) {
             stamp.entryRevisions = Object.fromEntries(Object.entries(stamp.entryRevisions || {}).map(([uid, revision]) => [uidMap[uid] ?? uid, revision]));
             for (const update of record.memoryMetadata?.wi?.updates || []) if (update.uid !== null && uidMap[update.uid] !== undefined) update.uid = uidMap[update.uid];
         }
-        for (const packet of bridge().snapshot().packets) if (memory.wiPackets?.[packet.id]?.status === 'applied')
-            memory.wiPackets[packet.id].revision = compactRevision([packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
+        for (const packet of bridge().snapshot().packets) if (['applied', 'reviewed-partial'].includes(memory.wiPackets?.[packet.id]?.status))
+            memory.wiPackets[packet.id].revision = wiAttemptRevision(packet);
     }
     memory.lastWIWrite = { book: name, records: ownedEntries(next, memory.owner).length, at: Date.now() };
     await saveState();
@@ -734,7 +736,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         if (cleanupOnly) { await saveState(); return; }
         const pending = snapshot.packets.filter(packet => !packet.stale && (force
             || state().wiPackets[packet.id]?.revision !== attemptSignature(packet)
-            || (retrySaved && !['applied', 'proposed', 'rejected', 'partial'].includes(state().wiPackets[packet.id]?.status))));
+            || (retrySaved && !['applied', 'proposed', 'rejected', 'partial', 'reviewed-partial'].includes(state().wiPackets[packet.id]?.status))));
         for (let i = 0; i < pending.length; i++) {
             unchanged(metadata); status(`Updating packet ${i + 1} / ${pending.length} · source ${sourceLabel(pending[i])}`);
             const packet = pending[i], revision = attemptSignature(packet);
@@ -787,7 +789,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const stale = snapshot.packets.filter(packet => packet.stale).length;
         const waiting = ownedEntries(book, state().owner).filter(entry => entryMeta(entry).main && !entry.content?.trim()).length;
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
-        const wiPending = Object.values(state().wiPackets).filter(item => !['applied', 'proposed', 'rejected'].includes(item.status));
+        const wiPending = Object.values(state().wiPackets).filter(item => !['applied', 'proposed', 'rejected', 'reviewed-partial'].includes(item.status));
         const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
             : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${diffManaged ? diffStatus() : 'Запись подтверждена на диске.'}${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
@@ -798,15 +800,25 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         if (!controller?.signal.aborted) toastr.warning(error.message, 'World Memory');
     } finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); }
 }
+function reviewedWIStatus(review) {
+    const items = review?.items || state()?.wiDiffState?.reviewHistory?.[review?.proposalId]?.review?.items;
+    if (Array.isArray(items)) {
+        const accepted = items.some(item => item.decision === 'accept');
+        const rejected = items.some(item => item.decision === 'reject');
+        return accepted && rejected ? 'reviewed-partial' : accepted ? 'applied' : 'rejected';
+    }
+    return review?.decision === 'accept' ? 'applied' : 'rejected';
+}
 function recordDiffOutcome(packet, result, previous) {
     const memory = state(), packets = bridge().snapshot({ effective: false }).packets;
     const priorOutcome = memory.wiPackets[packet.id];
     if (!(priorOutcome?.correctionResolved && priorOutcome.revision === wiAttemptRevision(packet))) memory.wiPackets[packet.id] = { revision: wiAttemptRevision(packet), status: result.status, mode: 'diff', ...(result.issues?.length ? { issues: result.issues, message: `WI partial: ${result.issues.length} item(s) need correction.` } : {}) };
     memory.packets[packet.id] = packetSignature(packet);
-    if (previous && memory.wiDiffState.lastReview?.proposalId === previous.id) {
-        const prior = packets.find(item => item.id === previous.packetId);
+    const reviewedPacketId = previous?.packetId || result.reviewedPacketId;
+    if (reviewedPacketId && memory.wiDiffState.lastReview?.proposalId === (previous?.id || packet.memoryMetadata?.wiDiff?.review?.proposalId)) {
+        const prior = packets.find(item => item.id === reviewedPacketId);
         if (prior && memory.wiPackets[prior.id]?.status !== 'partial') memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior),
-            status: memory.wiDiffState.lastReview.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+            status: reviewedWIStatus(memory.wiDiffState.lastReview), mode: 'diff' };
     }
 }
 async function correctPartialWI({ savedOnly = false } = {}) {
@@ -908,12 +920,12 @@ async function requestWIDiffReview(request, signal, savedOnly = false) {
             ? memory.wiDiffState.backfillPending?.state.pending : memory.wiDiffState.pending;
         const result = await wiDiffRuntime.consume(saved.packet); guard();
         // The synthetic review packet is a receipt, not an archive/history record.
-        if (previous || result.acceptedPacketId) {
-            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.acceptedPacketId));
-            if (prior && memory.wiPackets[prior.id]?.status !== 'partial') memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+        if (previous || result.reviewedPacketId || result.acceptedPacketId) {
+            const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.reviewedPacketId || result.acceptedPacketId));
+            if (prior && memory.wiPackets[prior.id]?.status !== 'partial') memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: reviewedWIStatus(memory.wiDiffState.lastReview), mode: 'diff' };
         }
         saved.status = 'applied'; saved.error = null; await saveState(); guard();
-        history.changed(); status(`${wire.review.decision === 'accept' ? 'Предложение WI подтверждено и записано.' : 'Предложение отклонено; прежний WI сохранён.'} ${diffStatus()}`);
+        history.changed(); status(`WI review: ${reviewedWIStatus(memory.wiDiffState.lastReview)}. ${diffStatus()}`);
         return { result, wire };
     } catch (error) {
         if (ctx().chatMetadata === metadata && state() === memory && memory.wiDiffReview) {
@@ -1016,7 +1028,9 @@ function coveragePacket(packet, memory) {
     const receipt = memory.wiPackets?.[packet.id];
     const currentReceipt = !stale && binding && receipt?.revision === revision;
     const applied = !stale && linked && binding && meta?.sourceStatus !== 'summary-only'
-        && receipt?.status === 'applied' && receipt.revision === revision;
+        && ['applied', 'reviewed-partial'].includes(receipt?.status) && receipt.revision === revision;
+    const reviewItems = memory.wiDiffState?.reviewHistory?.[stamp?.proposalId]?.review?.items || [];
+    const rejectedItems = reviewItems.filter(item => item.decision === 'reject');
     const annotationWarning = Boolean(packet.annotationError || packet.annotationResponse?.error || packet.annotationStatus === 'partial');
     const l0 = coverageState(stale ? 'warn' : 'ok', stale ? 'L0 сохранён; исходники изменились' : packet.manual ? 'Сохранённый ручной L0' : 'L0 сохранён');
     const spine = stale ? coverageState('warn', 'Скелет требует проверки: исходники изменились')
@@ -1036,17 +1050,19 @@ function coveragePacket(packet, memory) {
                 : meta.wi.updates.length ? `WI подготовлен: ${meta.wi.updates.length} изменений` : 'Проверено: новых фактов WI нет')
             : coverageState(!linked || savedWI ? 'warn' : annotationWarning ? 'error' : 'pending', !linked ? 'WI нужны исходники'
                 : savedWI ? 'Сохранённый WI не соответствует текущему L0' : annotationWarning ? 'WI не подготовлен; проверьте ответ' : 'WI ещё не подготовлен');
-    const written = applied ? coverageState('ok', diff ? 'DIFF проверен; подтверждённое состояние записано'
+    const written = applied && receipt.status === 'reviewed-partial'
+        ? coverageState('warn', `WI: \u043f\u0440\u0438\u043d\u044f\u0442\u0430\u044f \u0447\u0430\u0441\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u0430; \u043e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e ${rejectedItems.length}. ${rejectedItems.map(item => item.reason).join(' | ')}`)
+        : applied ? coverageState('ok', diff ? 'DIFF проверен; подтверждённое состояние записано'
         : !wi ? 'WI записан через legacy; отдельный результат подготовки не сохранён'
         : meta.wi.updates.length ? 'Текущий результат WI записан' : 'Пустой результат применён; запись не нужна')
         : receipt?.status === 'error' ? coverageState('error', `Ошибка записи WI: ${receipt.message || 'причина не сохранена'}`)
-            : stale || receipt?.status === 'stale' || (receipt?.status === 'applied' && !applied)
+            : stale || receipt?.status === 'stale' || (['applied', 'reviewed-partial'].includes(receipt?.status) && !applied)
                 ? coverageState('warn', 'Прежний статус записи WI не подтверждает текущую версию / книгу')
                 : currentReceipt && receipt?.status === 'proposed' ? coverageState('pending', 'Предложение сохранено; ждёт следующего блока или явной проверки')
                     : currentReceipt && receipt?.status === 'rejected' ? coverageState('warn', 'Предложение отклонено; прежний WI сохранён')
                         : coverageState('pending', wi ? 'WI готов, но текущая запись не подтверждена' : 'WI ещё не записан');
     const cells = [l0, spine, search, prepared, written];
-    return { packet, cells, linked, applied, wi, needsApply: wi && (!currentReceipt || !['applied', 'proposed', 'rejected'].includes(receipt?.status)), missing: prepared.kind !== 'ok',
+    return { packet, cells, linked, applied, wi, needsApply: wi && (!currentReceipt || !['applied', 'proposed', 'rejected', 'reviewed-partial'].includes(receipt?.status)), missing: prepared.kind !== 'ok',
         attention: cells.some(cell => cell.kind === 'warn' || cell.kind === 'error'), needsSpine: !stale && !packet.manual && !packet.storySpine };
 }
 function coverageRange(packet) {

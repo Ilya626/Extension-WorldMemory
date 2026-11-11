@@ -66,6 +66,24 @@ test('partial preserves valid items and review, holds removals and survives repl
  const next=applyWIDiffResponse(f.state,wire,options);
  assert.equal(next.pending.add.length,1); assert.equal(next.pending.remove.length,0); assert.equal(issues.length,2);
  const again=[]; applyWIDiffResponse(next,wire,{...options,issues:again}); assert.deepEqual(again,issues);
+ const proposal=applyWIDiffResponse(f.state,{version:1,review:null,add:[{...f.add,facts:'Keep this.\nReject this.'}],remove:[{id:claim.id,revision:claim.revision}]},f.options(f.state,'p1','semantic','s1'));
+ const [good,bad]=proposal.pending.add;
+ const review={proposalId:'semantic',decision:'partial',items:[{id:good.id,decision:'accept'},{id:bad.id,decision:'reject',reason:'Unsupported'}, {id:claim.id,decision:'reject',reason:'Still current'}]};
+ const reviewedWire={version:1,review,add:[],remove:[]}, reviewOptions=f.options(proposal,'p2','review-semantic','s2');
+ const reviewed=applyWIDiffResponse(proposal,reviewedWire,reviewOptions);
+ assert.ok(reviewed.confirmed.claims.some(c=>c.id===good.id)); assert.ok(!reviewed.confirmed.claims.some(c=>c.id===bad.id));
+ assert.ok(!reviewed.confirmed.claims.find(c=>c.id===claim.id).retired);
+ assert.deepEqual(reviewed.reviewHistory.semantic.proposal,proposal.pending); assert.deepEqual(reviewed.reviewHistory.semantic.review,review);
+ assert.deepEqual(applyWIDiffResponse(reviewed,reviewedWire,reviewOptions),reviewed);
+ for (const items of [review.items.slice(0,2), [...review.items,{...review.items[0]}], [{...review.items[0],id:'unknown'},...review.items.slice(1)], [review.items[0],{...review.items[1],reason:''},review.items[2]]])
+  assert.throws(()=>applyWIDiffResponse(proposal,{...reviewedWire,review:{...review,items}},reviewOptions),/partial review/);
+ assert.equal(proposal.pending.add.length,2);
+ const fresh={...f.add,uid:null,subject:'new:1',facts:'Accepted.\nRejected.'}, other={...fresh,subject:'new:2',facts:'Rejected entirely.'};
+ const prior=applyWIDiffResponse(f.state,{version:1,review:null,add:[fresh,other],remove:[]},f.options(f.state,'p1','identities','s1'));
+ const [kept,dropped,allDropped]=prior.pending.add;
+ const identities=applyWIDiffResponse(prior,{version:1,review:{proposalId:'identities',decision:'partial',items:[{id:kept.id,decision:'accept'},{id:dropped.id,decision:'reject',reason:'unsupported'},{id:allDropped.id,decision:'reject',reason:'unsupported'}]},add:[{...fresh,subject:kept.subject,facts:'Continues.'},{...other,subject:allDropped.subject,facts:'New evidence.'}],remove:[]},f.options(prior,'p2','identity-review','s2'));
+ assert.equal(identities.pending.add[0].subject,kept.subject);
+ assert.notEqual(identities.pending.add[1].subject,allDropped.subject);
 });
 
 test('targeted correction adds only failed items and keeps original pending claims', () => {

@@ -4,10 +4,11 @@ import { memoryTextRevision } from './vendor/summaryception/memory-metadata.js';
 import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, bindWIDiffUIDs, retryWIDiffItems, discardEmptyWIDiffProposal } from './wi-diff.js';
 
 export const DIFF_SYSTEM = `Maintain source-backed entity World Info, separate from chronological history. Inside the ONE existing <memory_metadata> JSON object, add a sibling property "wiDiff" beside lprime and facts. Never emit a nested "memory_metadata" property, a second object, or wi.updates. Valid shape: {"wiDiff":{"version":1,"review":null,"add":[{"uid":null,"subject":"new:1","name":"Observed name","type":"character","main":false,"keys":["Observed name"],"facts":"One supported clause per line."}],"remove":[]}}.
-For an existing entity, uid is its supplied integer. Other allowed types are place, object, organization and lore. A removal is an object with the exact supplied claim id and revision. When pending exists, review is {"proposalId":"exact pending ID","decision":"accept"} or the same object with decision "reject". This replaces review:null; it is not an extra object. Facts follow the requested prose language, while names retain their observed script.
-Review the previous pending diff against its supplied pending_sources and confirmed evidence; it is NOT confirmed yet. Accept it only if supported, otherwise reject it and propose corrected clauses. Give new additions only from this packet's new_sources; saved L0 is navigation, not proof. Cover meaningful named secondary characters and reusable places/objects/groups as well as main actors. Preserve speaker attribution, uncertainty, conditions, plans versus outcomes, and player agency. Keep names and aliases in their observed script. A repeated name alone does not establish identity. Use existing native UIDs; never edit manual/foreign records. A genuinely new subject uses one consistent new:* handle. If rejecting a pending subject, use a fresh new:* handle for a corrected new subject; do not assume the rejected identity is confirmed. If accepting a previous new subject whose UID is still null, use its exact pending add.subject handle to extend it, rather than inventing another new:* entity. Do not translate, restate or copy retained_evidence or pending as new additions, even if their prose is in another language. Keep prior wording; add only a genuinely new clause from new_sources. Use exact remove IDs to retire outdated CURRENT conditions (location, pending action, unresolved state) when new_sources settle or change them. Keep completed historical events and their originals. New changes remain pending until a later review. With no pending use review:null. With no justified changes use empty add/remove arrays. For explicit review_only return the review and empty add/remove arrays.`;
+For an existing entity, uid is its supplied integer. Other allowed types are place, object, organization and lore. A removal is an object with the exact supplied claim id and revision. When pending exists, review is {"proposalId":"exact pending ID","decision":"partial","items":[{"id":"a1","decision":"accept"},{"id":"a2","decision":"reject","reason":"not supported"}]}. Give one decision and a brief reason for EVERY pending add and remove item, using its short id exactly. Evaluate each claim separately; an unsupported claim must not reject other supported claims. This replaces review:null; it is not an extra object. Facts follow the requested prose language, while names retain their observed script.
+Review each previous pending claim against pending_sources and confirmed evidence; it is NOT confirmed yet. Check subject identity and UID as well as the fact. Reject a new null-UID subject when the sources and retained entity together establish it is an existing UID; do not merge based only on a shared name. Reject repeated retained facts and assertions that no new action occurred. Accept independently only supported, nonduplicate facts attached to the supported entity, and give a precise reason for each rejection. Give new additions only from this packet's new_sources; saved L0 is navigation, not proof. Cover meaningful named secondary characters and reusable places/objects/groups as well as main actors. Preserve speaker attribution, uncertainty, conditions, plans versus outcomes, and player agency. Keep names and aliases in their observed script. A repeated name alone does not establish identity. Use existing native UIDs; never edit manual/foreign records. Use the existing UID when the sources and retained evidence establish the same entity, and do not create duplicate entities. A name match by itself is not proof of identity. A genuinely new subject uses one consistent new:* handle. Do not add claims that an entity had no new action or other absence-of-news statements. If rejecting a pending subject, use a fresh new:* handle for a corrected new subject; do not assume the rejected identity is confirmed. If accepting a previous new subject whose UID is still null, use its exact pending add.subject handle to extend it, rather than inventing another new:* entity. Do not translate, restate or copy retained_evidence or pending as new additions, even if their prose is in another language. Keep prior wording; add only a genuinely new clause from new_sources. Use exact remove IDs to retire outdated CURRENT conditions (location, pending action, unresolved state) when new_sources settle or change them. Keep completed historical events and their originals. New changes remain pending until a later review. With no pending use review:null. With no justified changes use empty add/remove arrays. For explicit review_only return the review and empty add/remove arrays.`;
 
 const clone = value => structuredClone(value);
+const acceptedReview = review => review?.decision === 'accept' || (review?.decision === 'partial' && review.items?.some(item => item.decision === 'accept'));
 const error = text => { throw new Error(`WI diff: ${text}`); };
 const idOf = message => message.sc_message_id || message.extra?.sc_message_id || message.id;
 const manual = entry => Boolean(entryMeta(entry)?.manual || entryMeta(entry)?.lastGenerated
@@ -119,15 +120,21 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
             ...(historical ? { historical: true, prefixState: state } : {}),
             ...(backfillReview ? { backfillReview: true } : {}),
             ...(rebaseReview ? { rebaseReview: true } : {}),
-            ...((backfillReview || rebaseReview) ? { reviewedPacketId: state.pending?.packetId } : {}),
+            ...(state.pending ? { reviewedPacketId: state.pending.packetId } : {}),
             ...((historical || backfillReview || rebaseReview) ? { liveHead: liveState.confirmed.head,
                 livePending: compactRevision(liveState.pending), backfillRevision: backfillRevision(liveState) } : {}) };
-        const proposed = new Map();
-        for (const claim of projected.pending?.add || []) {
+        const proposed = new Map(), reviewRefs = {};
+        for (const [index, claim] of (projected.pending?.add || []).entries()) {
+            const ref = `a${index + 1}`; reviewRefs[ref] = claim.id;
             if (!proposed.has(claim.subject)) proposed.set(claim.subject, { uid: claim.uid, subject: claim.subject,
                 name: claim.name, type: claim.type, main: claim.main, keys: [...claim.keys], claims: [] });
-            proposed.get(claim.subject).claims.push({ id: claim.id, revision: claim.revision, text: claim.text });
+            proposed.get(claim.subject).claims.push({ id: ref, text: claim.text });
         }
+        const pendingRemove = (projected.pending?.remove || []).map((item, index) => {
+            const ref = `r${index + 1}`, target = flat(projected.records).find(claim => claim.id === item.id);
+            reviewRefs[ref] = item.id; return { id: ref, subject: target?.subject, text: target?.text };
+        });
+        stamp.reviewRefs = reviewRefs;
         return { systemPrompt: DIFF_SYSTEM,
             context: { version: 1, review_only: reviewOnly, baseHead: stamp.baseHead,
                 existing_index: projected.records.map(({ uid, subject, name, type, keys, main }) => ({ uid, subject, name, type, keys, main })),
@@ -135,7 +142,7 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
                     claims: claims.map(({ id, revision, text, packetId }) => ({ id, revision, text, packetId })) })),
                 pending: projected.pending ? { id: projected.pending.id, packetId: projected.pending.packetId,
                     through: projected.pending.through, baseHead: projected.pending.baseHead,
-                    add: [...proposed.values()], remove: projected.pending.remove } : null,
+                    add: [...proposed.values()], remove: pendingRemove } : null,
                 pending_sources: state.pending ? Object.keys(state.pending.sources).map(id => clone(run.originals[id])) : [],
                 instruction: 'Confirmed references only. Pending is proposed, not established. New facts use only this packet new_sources. Review pending against pending_sources. No later book/index is supplied.' }, stamp };
     }
@@ -200,7 +207,10 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
     }
 
     async function consume(packet) {
-        const run = capture(), wire = packet.memoryMetadata?.wiDiff, stamp = packet.memoryMetadata?.wiContext;
+        const run = capture(), rawWire = packet.memoryMetadata?.wiDiff, stamp = packet.memoryMetadata?.wiContext;
+        const wire = clone(rawWire);
+        if (wire?.review?.items && stamp?.reviewRefs) for (const decision of wire.review.items)
+            decision.id = stamp.reviewRefs[decision.id] || decision.id;
         if (!wire || !stamp?.diff || stamp.version !== 1) error('no saved diff/context');
         assertBinding(run, stamp); checkRefs(stamp.sourceFingerprints, run);
         if (signature([...(packet.sourceMessageIds || [])].sort()) !== signature([...stamp.sourceMessageIds].sort()))
@@ -218,10 +228,10 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if ((stamp.backfillReview || stamp.rebaseReview) && state.receipts?.[stamp.proposalId]) {
             const revision = compactRevision([wire, stamp.packetId || packet.id, stamp.through, stamp.sourceMessageIds]);
             if (state.receipts[stamp.proposalId] !== revision) error('proposal ID reused for a different response');
-            if (wire.review?.decision === 'accept') await materialize();
+            if (acceptedReview(wire.review)) await materialize();
             guard(run);
-            return { status: run.memory.wiDiffState.pending ? 'proposed' : 'applied',
-                acceptedPacketId: wire.review?.decision === 'accept' ? stamp.reviewedPacketId : null };
+            return { status: run.memory.wiDiffState.pending ? 'proposed' : 'applied', reviewedPacketId: stamp.reviewedPacketId || null,
+                acceptedPacketId: acceptedReview(wire.review) ? stamp.reviewedPacketId : null };
         }
         if (stamp.historical && state.backfillPending?.state.receipts?.[stamp.proposalId]) {
             const revision = compactRevision([wire, stamp.packetId || packet.id, stamp.through, stamp.sourceMessageIds]);
@@ -238,6 +248,9 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if (!base) error('saved earlier WI proposal is missing');
         if (stamp.rebaseReview) { base = clone(base); base.pending.baseHead = base.confirmed.head; }
         const previous = base.pending;
+        const reviewedPacketId = previous?.id === wire.review?.proposalId ? previous.packetId
+            : base.reviewHistory?.[wire.review?.proposalId]?.proposal?.packetId
+                || (base.lastReview?.proposalId === wire.review?.proposalId ? stamp.reviewedPacketId : null);
         const issues = [];
         let next = applyWIDiffResponse(base, wire, { issues, ...binding(run), baseHead: stamp.baseHead,
             packetId: stamp.packetId || packet.id, through: stamp.through, proposalId: stamp.proposalId,
@@ -253,7 +266,7 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
             else delete next.backfillPending;
         } else if (stamp.backfillReview) {
             const reviewed = next; next = clone(state);
-            if (wire.review?.decision === 'accept') {
+            if (acceptedReview(wire.review)) {
                 const original = new Map(base.confirmed.claims.map(claim => [claim.id, claim]));
                 for (const claim of reviewed.confirmed.claims) {
                     const old = original.get(claim.id), live = next.confirmed.claims.find(item => item.id === claim.id);
@@ -268,13 +281,18 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
                 // review must read the newly confirmed evidence before rebasing.
             }
             next.lastReview = clone(reviewed.lastReview);
+            if (reviewed.reviewHistory?.[reviewed.lastReview?.proposalId]) {
+                next.reviewHistory ||= {};
+                next.reviewHistory[reviewed.lastReview.proposalId] = clone(reviewed.reviewHistory[reviewed.lastReview.proposalId]);
+            }
             next.receipts[stamp.proposalId] = reviewed.receipts[stamp.proposalId];
             delete next.backfillPending;
         }
         run.memory.wiDiffState = next; await saveState(); guard(run);
-        if (wire.review?.decision === 'accept') await materialize(); guard(run);
+        if (acceptedReview(wire.review)) await materialize(); guard(run);
         return { status: issues.length ? 'partial' : (stamp.historical ? next.backfillPending : next.pending) ? 'proposed' : 'applied', issues,
-            acceptedPacketId: previous?.id === wire.review?.proposalId && wire.review?.decision === 'accept' ? previous.packetId : null };
+            reviewedPacketId: reviewedPacketId || null,
+            acceptedPacketId: acceptedReview(wire.review) ? reviewedPacketId || null : null };
     }
 
     async function retryItems(packet, wire, proposalId, signal) {

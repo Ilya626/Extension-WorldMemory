@@ -144,17 +144,33 @@ export function applyWIDiffResponse(state, wire, options = {}) {
         ? next.pending.add.filter(item => item.uid === null).map(item => item.subject) : []);
     if (next.pending) {
         const pending = next.pending, review = wire.review;
-        if (!review || review.proposalId !== pending.id || !['accept', 'reject'].includes(review.decision)) fail('review must address the pending proposal');
-        if (review.decision === 'accept') {
+        if (!review || review.proposalId !== pending.id || !['accept', 'reject', 'partial'].includes(review.decision)) fail('review must address the pending proposal');
+        let acceptedAdd = review.decision === 'accept' ? pending.add : [], acceptedRemove = review.decision === 'accept' ? pending.remove : [];
+        if (review.decision === 'partial') {
+            const ids = [...pending.add.map(item => item.id), ...pending.remove.map(item => item.id)];
+            if (new Set(ids).size !== ids.length || !Array.isArray(review.items) || review.items.length !== ids.length
+                || new Set(review.items.map(item => item?.id)).size !== ids.length
+                || review.items.some(item => !ids.includes(item?.id) || !['accept', 'reject'].includes(item.decision)
+                    || (item.decision === 'reject' && (typeof item.reason !== 'string' || !item.reason.trim()))))
+                fail('partial review must decide every pending item exactly once and explain rejections');
+            const decisions = new Map(review.items.map(item => [item.id, item.decision]));
+            acceptedAdd = pending.add.filter(item => decisions.get(item.id) === 'accept');
+            acceptedRemove = pending.remove.filter(item => decisions.get(item.id) === 'accept');
+            for (const item of pending.add) if (item.uid === null && decisions.get(item.id) === 'reject'
+                && !acceptedAdd.some(accepted => accepted.subject === item.subject)) rejectedSubjects.add(item.subject);
+            next.reviewHistory ||= {};
+            next.reviewHistory[pending.id] = { proposal: clone(pending), review: clone(review), through, sources: clone(refs) };
+        }
+        if (review.decision !== 'reject') {
             if (pending.baseHead !== next.confirmed.head || !within(pending.sources, sources, through)) fail('pending base or source revision changed');
-            for (const addition of pending.add) checkProtected(addition);
-            for (const removal of pending.remove) {
+            for (const addition of acceptedAdd) checkProtected(addition);
+            for (const removal of acceptedRemove) {
                 const claim = next.confirmed.claims.find(item => item.id === removal.id);
                 if (!claim || claim.revision !== removal.revision || claim.retired) fail('remove target changed');
                 checkProtected(claim);
                 claim.retired = { through, sources: { ...clone(pending.sources), ...clone(refs) }, proposalId: pending.id };
             }
-            for (const addition of pending.add) next.confirmed.claims.push({ ...addition, acceptedThrough: through });
+            for (const addition of acceptedAdd) next.confirmed.claims.push({ ...addition, acceptedThrough: through });
             next.confirmed.head = head(next.confirmed.claims);
         }
         next.lastReview = { proposalId: pending.id, decision: review.decision, through };
@@ -178,11 +194,11 @@ export function applyWIDiffResponse(state, wire, options = {}) {
         const update = clone(original);
         // A rejected proposal cannot supply an identity, but its exact handle can
         // still group clauses for a newly proposed subject in this response.
-        if (update?.uid === null && wire.review?.decision === 'reject'
+        if (update?.uid === null && ['reject', 'partial'].includes(wire.review?.decision)
             && next.lastReview?.proposalId === wire.review.proposalId
             && typeof update.subject === 'string'
             && update.subject.startsWith(`${wire.review.proposalId}:new:`)
-            && (rejectedSubjects.has(update.subject) || !state.confirmed.claims.some(claim => claim.subject === update.subject)))
+            && (rejectedSubjects.has(update.subject) || (wire.review.decision === 'reject' && !state.confirmed.claims.some(claim => claim.subject === update.subject))))
             update.subject = `new:rejected:${update.subject.slice(wire.review.proposalId.length + 5)}`;
         if (!update || (update.uid !== null && !validUID(update.uid)) || typeof update.name !== 'string'
             || !update.name.trim() || !TYPES.includes(update.type) || typeof update.facts !== 'string'

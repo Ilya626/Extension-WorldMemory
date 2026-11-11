@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.37 ? 2026-11-11 ? review WI claims individually
+
+- Review each proposed claim independently; materialize accepted changes and retain rejected claims and reasons in review history. Existing all-accept and all-reject responses remain supported.
+- Check source-backed identity and existing facts when generating and reviewing changes. Preserve manual WI and branch/source bindings.
+- Show partially reviewed WI as written in the history coverage map and recover its original packet status when replaying a saved receipt.
+
 ## 0.5.36 ? 2026-11-11 ? isolate WI corrections and retain calendar precision
 
 - Keep valid WI changes when individual additions or removals fail, record partial outcomes, and allow later packets to continue. Correct remaining items through one model request or reapply a saved response without another call.
