@@ -1,11 +1,11 @@
 import { OWNER, entryMeta, fingerprint, markGenerated, signature, compactRevision } from './memory.js';
 import { sourceFingerprint } from './archive-store.js';
 import { memoryTextRevision } from './vendor/summaryception/memory-metadata.js';
-import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, bindWIDiffUIDs } from './wi-diff.js';
+import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, bindWIDiffUIDs, retryWIDiffItems, discardEmptyWIDiffProposal } from './wi-diff.js';
 
 export const DIFF_SYSTEM = `Maintain source-backed entity World Info, separate from chronological history. Inside the ONE existing <memory_metadata> JSON object, add a sibling property "wiDiff" beside lprime and facts. Never emit a nested "memory_metadata" property, a second object, or wi.updates. Valid shape: {"wiDiff":{"version":1,"review":null,"add":[{"uid":null,"subject":"new:1","name":"Observed name","type":"character","main":false,"keys":["Observed name"],"facts":"One supported clause per line."}],"remove":[]}}.
 For an existing entity, uid is its supplied integer. Other allowed types are place, object, organization and lore. A removal is an object with the exact supplied claim id and revision. When pending exists, review is {"proposalId":"exact pending ID","decision":"accept"} or the same object with decision "reject". This replaces review:null; it is not an extra object. Facts follow the requested prose language, while names retain their observed script.
-Review the previous pending diff against its supplied pending_sources and confirmed evidence; it is NOT confirmed yet. Accept it only if supported, otherwise reject it and propose corrected clauses. Give new additions only from this packet's new_sources; saved L0 is navigation, not proof. Cover meaningful named secondary characters and reusable places/objects/groups as well as main actors. Preserve speaker attribution, uncertainty, conditions, plans versus outcomes, and player agency. Keep names and aliases in their observed script. A repeated name alone does not establish identity. Use existing native UIDs; never edit manual/foreign records. A genuinely new subject uses one consistent new:* handle. If accepting a previous new subject whose UID is still null, use its exact pending add.subject handle to extend it, rather than inventing another new:* entity. Do not translate, restate or copy retained_evidence or pending as new additions, even if their prose is in another language. Keep prior wording; add only a genuinely new clause from new_sources. Use exact remove IDs to retire outdated CURRENT conditions (location, pending action, unresolved state) when new_sources settle or change them. Keep completed historical events and their originals. New changes remain pending until a later review. With no pending use review:null. With no justified changes use empty add/remove arrays. For explicit review_only return the review and empty add/remove arrays.`;
+Review the previous pending diff against its supplied pending_sources and confirmed evidence; it is NOT confirmed yet. Accept it only if supported, otherwise reject it and propose corrected clauses. Give new additions only from this packet's new_sources; saved L0 is navigation, not proof. Cover meaningful named secondary characters and reusable places/objects/groups as well as main actors. Preserve speaker attribution, uncertainty, conditions, plans versus outcomes, and player agency. Keep names and aliases in their observed script. A repeated name alone does not establish identity. Use existing native UIDs; never edit manual/foreign records. A genuinely new subject uses one consistent new:* handle. If rejecting a pending subject, use a fresh new:* handle for a corrected new subject; do not assume the rejected identity is confirmed. If accepting a previous new subject whose UID is still null, use its exact pending add.subject handle to extend it, rather than inventing another new:* entity. Do not translate, restate or copy retained_evidence or pending as new additions, even if their prose is in another language. Keep prior wording; add only a genuinely new clause from new_sources. Use exact remove IDs to retire outdated CURRENT conditions (location, pending action, unresolved state) when new_sources settle or change them. Keep completed historical events and their originals. New changes remain pending until a later review. With no pending use review:null. With no justified changes use empty add/remove arrays. For explicit review_only return the review and empty add/remove arrays.`;
 
 const clone = value => structuredClone(value);
 const error = text => { throw new Error(`WI diff: ${text}`); };
@@ -226,7 +226,8 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if (stamp.historical && state.backfillPending?.state.receipts?.[stamp.proposalId]) {
             const revision = compactRevision([wire, stamp.packetId || packet.id, stamp.through, stamp.sourceMessageIds]);
             if (state.backfillPending.state.receipts[stamp.proposalId] !== revision) error('proposal ID reused for a different response');
-            return { status: 'proposed', acceptedPacketId: null };
+            const issues = clone(state.backfillPending.state.receiptIssues?.[stamp.proposalId] || []);
+            return { status: issues.length ? 'partial' : 'proposed', issues, acceptedPacketId: null };
         }
         if (stamp.historical || stamp.backfillReview || stamp.rebaseReview) {
             if (state.confirmed.head !== stamp.liveHead || compactRevision(state.pending) !== stamp.livePending
@@ -237,7 +238,8 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if (!base) error('saved earlier WI proposal is missing');
         if (stamp.rebaseReview) { base = clone(base); base.pending.baseHead = base.confirmed.head; }
         const previous = base.pending;
-        let next = applyWIDiffResponse(base, wire, { ...binding(run), baseHead: stamp.baseHead,
+        const issues = [];
+        let next = applyWIDiffResponse(base, wire, { issues, ...binding(run), baseHead: stamp.baseHead,
             packetId: stamp.packetId || packet.id, through: stamp.through, proposalId: stamp.proposalId,
             sourceMessageIds: stamp.sourceMessageIds, sources: fresh.sources,
             protectedUIDs: protectedUIDs(book, state.owner),
@@ -271,8 +273,38 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         }
         run.memory.wiDiffState = next; await saveState(); guard(run);
         if (wire.review?.decision === 'accept') await materialize(); guard(run);
-        return { status: (stamp.historical ? next.backfillPending : next.pending) ? 'proposed' : 'applied',
+        return { status: issues.length ? 'partial' : (stamp.historical ? next.backfillPending : next.pending) ? 'proposed' : 'applied', issues,
             acceptedPacketId: previous?.id === wire.review?.proposalId && wire.review?.decision === 'accept' ? previous.packetId : null };
+    }
+
+    async function retryItems(packet, wire, proposalId, signal) {
+        const run = capture(), stamp = packet.memoryMetadata?.wiContext, state = run.memory?.wiDiffState;
+        if (!stamp?.diff || !state) error('saved diff/context missing');
+        assertBinding(run, stamp); checkRefs(stamp.sourceFingerprints, run);
+        const live = run.view.packets.find(item => item.id === packet.id);
+        if (!live || live.stale || memoryTextRevision(live.text) !== stamp.packetTextRevision
+            || signature([...live.sourceMessageIds].sort()) !== signature([...stamp.sourceMessageIds].sort())) error('saved packet changed');
+        const book = await getBook(); signal?.throwIfAborted(); guard(run); checkRefs(stamp.sourceFingerprints, capture());
+        const historical = state.backfillPending?.state.pending?.id === stamp.proposalId;
+        const target = historical ? state.backfillPending.state : state;
+        const result = retryWIDiffItems(target, wire, { ...binding(run), originalProposalId: stamp.proposalId,
+            packetId: stamp.packetId || packet.id, proposalId, through: stamp.through,
+            sourceMessageIds: stamp.sourceMessageIds, sources: capture().sources, baseHead: target.confirmed.head,
+            protectedUIDs: protectedUIDs(book, state.owner),
+            allowedUIDs: getWIDiffContext(target, { sources: run.sources, cutoff: stamp.through }).records.map(x => x.uid).filter(x => x !== null) });
+        if (run.memory.wiDiffState !== state) error('confirmed state changed');
+        signal?.throwIfAborted();
+        if (historical) { const merged = clone(state); merged.backfillPending.state = result.state; run.memory.wiDiffState = merged; }
+        else run.memory.wiDiffState = result.state;
+        await saveState(); guard(run);
+        return { status: result.issues.length ? 'partial' : 'proposed', issues: result.issues };
+    }
+
+    async function discardEmptyProposal(packet) {
+        const run = capture(), state = run.memory?.wiDiffState, id = packet.memoryMetadata?.wiContext?.proposalId;
+        const next = discardEmptyWIDiffProposal(state, id);
+        if (!next) return false;
+        guard(run); run.memory.wiDiffState = next; await saveState(); guard(run); return true;
     }
 
     async function reviewContext() {
@@ -283,5 +315,5 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         return { ...prepared, packet: { id: prepared.stamp.packetId, sourceMessageIds: [...prepared.stamp.sourceMessageIds],
             text: '', memoryMetadata: { wiContext: prepared.stamp } } };
     }
-    return Object.freeze({ prepare, consume, materialize, reviewContext });
+    return Object.freeze({ prepare, consume, materialize, reviewContext, retryItems, discardEmptyProposal });
 }

@@ -127,6 +127,7 @@ export function applyWIDiffResponse(state, wire, options = {}) {
     const wireRevision = compactRevision([wire, packetId, through, sourceMessageIds]);
     if (state.receipts?.[proposalId]) {
         if (state.receipts[proposalId] !== wireRevision) fail('proposal ID reused for a different response');
+        if (options.issues) options.issues.push(...clone(state.receiptIssues?.[proposalId] || []));
         return clone(state);
     }
     const sources = sourceMap(options.sources), refs = refsFor(sourceMessageIds, sources, through);
@@ -139,6 +140,8 @@ export function applyWIDiffResponse(state, wire, options = {}) {
     const blocked = new Set(protectedUIDs);
     const checkProtected = claim => { if (validUID(claim.uid) && blocked.has(claim.uid)) fail('manual or foreign UID is read-only'); };
     const next = clone(state);
+    const rejectedSubjects = new Set(wire.review?.decision === 'reject' && next.pending?.id === wire.review.proposalId
+        ? next.pending.add.filter(item => item.uid === null).map(item => item.subject) : []);
     if (next.pending) {
         const pending = next.pending, review = wire.review;
         if (!review || review.proposalId !== pending.id || !['accept', 'reject'].includes(review.decision)) fail('review must address the pending proposal');
@@ -161,13 +164,26 @@ export function applyWIDiffResponse(state, wire, options = {}) {
     const active = getWIDiffContext(next, { sources, cutoff: through }).records.flatMap(record => record.claims);
     const existingUIDs = new Set([...allowedUIDs, ...active.map(claim => claim.uid).filter(validUID)]);
     const removed = new Set(), removals = [];
-    for (const target of wire.remove) {
+    const removeIssues = [];
+    for (const [itemIndex, target] of wire.remove.entries()) {
+      try {
         const claim = active.find(item => item.id === target?.id);
         if (!claim || claim.revision !== target.revision || removed.has(target.id)) fail('remove requires a unique visible claim ID and exact revision');
         checkProtected(claim); removed.add(target.id); removals.push({ id: target.id, revision: target.revision });
+      } catch (error) { if (!options.issues) throw error; removeIssues.push({ kind: 'remove', index: itemIndex, message: error.message }); }
     }
-    const additions = [], subjects = new Map();
-    for (const update of wire.add) {
+    const additions = [], subjects = new Map(), issues = [...removeIssues];
+    for (const [itemIndex, original] of wire.add.entries()) {
+      try {
+        const update = clone(original);
+        // A rejected proposal cannot supply an identity, but its exact handle can
+        // still group clauses for a newly proposed subject in this response.
+        if (update?.uid === null && wire.review?.decision === 'reject'
+            && next.lastReview?.proposalId === wire.review.proposalId
+            && typeof update.subject === 'string'
+            && update.subject.startsWith(`${wire.review.proposalId}:new:`)
+            && (rejectedSubjects.has(update.subject) || !state.confirmed.claims.some(claim => claim.subject === update.subject)))
+            update.subject = `new:rejected:${update.subject.slice(wire.review.proposalId.length + 5)}`;
         if (!update || (update.uid !== null && !validUID(update.uid)) || typeof update.name !== 'string'
             || !update.name.trim() || !TYPES.includes(update.type) || typeof update.facts !== 'string'
             || typeof update.main !== 'boolean' || !Array.isArray(update.keys)
@@ -179,9 +195,9 @@ export function applyWIDiffResponse(state, wire, options = {}) {
             : active.find(claim => claim.uid === update.uid)?.subject || subjectForUID(update.uid);
         const identity = compactRevision([update.uid, update.name, update.type, update.main, update.keys]);
         if (subjects.has(subject) && subjects.get(subject) !== identity) fail('one subject has conflicting identity fields');
-        subjects.set(subject, identity);
         const lines = textLines(update.facts);
         if (!lines.length) fail('add needs source-backed facts');
+        subjects.set(subject, identity);
         for (const text of lines) {
             const claim = { id: `${proposalId}:add:${additions.length}`, subject, uid: update.uid,
                 name: update.name.trim(), type: update.type, main: update.main,
@@ -189,10 +205,17 @@ export function applyWIDiffResponse(state, wire, options = {}) {
                 order: Math.min(...sourceMessageIds.map(id => sources[id].index)), contextThrough: through };
             claim.revision = claimRevision(claim); additions.push(claim);
         }
+      } catch (error) { if (!options.issues) throw error; issues.push({ kind: 'add', index: itemIndex, message: error.message }); }
     }
-    if (additions.length || removals.length) next.pending = { id: proposalId, packetId, through,
+    if (issues.some(issue => issue.kind === 'add') && removals.length) {
+        for (const removal of removals) issues.push({ kind: 'remove', id: removal.id, message: 'Held because an addition failed; dependency is unknown.' });
+        removals.length = 0;
+    }
+    if (additions.length || removals.length || issues.length) next.pending = { id: proposalId, packetId, through,
         contextThrough: through, baseHead: next.confirmed.head, sources: refs, add: additions, remove: removals };
     next.receipts[proposalId] = wireRevision;
+    if (issues.length) { next.receiptIssues ||= {}; next.receiptIssues[proposalId] = clone(issues); }
+    if (options.issues) options.issues.push(...issues);
     return next;
 }
 
@@ -213,5 +236,51 @@ export function bindWIDiffUIDs(state, mapping) {
     }
     next.confirmed.head = head(next.confirmed.claims);
     if (next.pending && pendingCurrent) next.pending.baseHead = next.confirmed.head;
+    return next;
+}
+
+// Explicit correction of only failed items while their original proposal remains pending.
+export function retryWIDiffItems(state, wire, options = {}) {
+    validateState(state);
+    if (state.receipts?.[options.proposalId]) {
+        const issues = [];
+        applyWIDiffResponse(state, { version: 1, review: null, add: wire.add || [], remove: wire.remove || [] }, { ...options, issues });
+        return { state: clone(state), issues };
+    }
+    const pending = state.pending;
+    if (!pending || pending.id !== options.originalProposalId || pending.baseHead !== state.confirmed.head)
+        fail('the original proposal must still be pending on its original base');
+    const base = clone(state); base.pending = null;
+    const issues = [], aliases = new Map(), reverse = new Map();
+    const additions = (wire.add || []).map(item => {
+        const copy = clone(item);
+        const existingSubject = copy?.uid === null && typeof copy.subject === 'string'
+            ? (copy.subject.startsWith('new:') ? `${options.originalProposalId}:${copy.subject}` : copy.subject) : null;
+        if (existingSubject && pending.add.some(claim => claim.uid === null && claim.subject === existingSubject)) {
+            if (!aliases.has(existingSubject)) { const local = `new:retry:${aliases.size}`; aliases.set(existingSubject, local); reverse.set(`${options.proposalId}:${local}`, existingSubject); }
+            copy.subject = aliases.get(existingSubject);
+        }
+        return copy;
+    });
+    const removals = (wire.remove || []).map(item => pending.remove.some(existing => existing.id === item?.id) ? null : item);
+    const retried = applyWIDiffResponse(base, { version: 1, review: null, add: additions, remove: removals }, { ...options, issues });
+    const next = clone(state);
+    if (retried.pending) {
+        for (const claim of retried.pending.add) if (reverse.has(claim.subject)) { claim.subject = reverse.get(claim.subject); claim.revision = claimRevision(claim); }
+        next.pending.add.push(...retried.pending.add); next.pending.remove.push(...retried.pending.remove);
+    }
+    next.receipts[options.proposalId] = compactRevision([{ version: 1, review: null, add: wire.add || [], remove: wire.remove || [] }, options.packetId, options.through, options.sourceMessageIds]);
+    next.receiptIssues ||= {};
+    next.receiptIssues[options.proposalId] = clone(issues);
+    return { state: next, issues };
+}
+
+export function discardEmptyWIDiffProposal(state, id) {
+    if (!state || !id) return null;
+    const historical = state.backfillPending?.state.pending?.id === id;
+    const pending = historical ? state.backfillPending.state.pending : state.pending;
+    if (!pending || pending.id !== id || pending.add.length || pending.remove.length) return null;
+    const next = clone(state);
+    if (historical) delete next.backfillPending; else next.pending = null;
     return next;
 }

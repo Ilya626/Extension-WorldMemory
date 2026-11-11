@@ -76,8 +76,10 @@ test('provider failure and Stop preserve all previously saved calendar data', as
         return { text: JSON.stringify(body) };
     });
     const invalidBefore = readPacket(invalid.archive, 'packet');
-    await assert.rejects(invalid.runtime.clarifyCalendar(), /Прежние даты и места сохранены/);
-    assert.deepEqual(readPacket(invalid.archive, 'packet'), invalidBefore);
+    const partial = await invalid.runtime.clarifyCalendar();
+    assert.match(partial.note, /Частичный результат/);
+    assert.deepEqual(readPacket(invalid.archive, 'packet').timeline.locations, invalidBefore.timeline.locations);
+    assert.match(readPacket(invalid.archive, 'packet').timelineError, /Location 1/);
     for (const operation of ['save failure', 'Stop during save']) {
         let f;
         f = fixture(async (_settings, _system, prompt) => f.response(prompt));
@@ -91,6 +93,23 @@ test('provider failure and Stop preserve all previously saved calendar data', as
         assert.deepEqual(readPacket(f.archive, 'packet'), before);
         assert.deepEqual(f.durable().records.packet, before);
     }
+});
+
+test('partial calendar response keeps supported date, new and previously confirmed locations', async () => {
+    let f;
+    f = fixture(async (_settings, _system, prompt) => {
+        const response = f.response(prompt), body = JSON.parse(response.text);
+        const timeline = body.packets[0].timeline;
+        timeline.locations[0].quote = 'you arrive at the harbor';
+        timeline.locations.push({ ...timeline.locations[0], place: 'unsupported', quote: 'Unsupported model quotation.' });
+        return { text: JSON.stringify(body) };
+    });
+    const result = await f.runtime.clarifyCalendar();
+    const saved = readPacket(f.archive, 'packet');
+    assert.equal(saved.timeline.date.text, 'next morning');
+    assert.deepEqual(saved.timeline.locations.map(location => location.place), ['previously confirmed harbor', 'harbor']);
+    assert.match(saved.timelineError, /Location 2/);
+    assert.match(result.note, /Частичный результат/);
 });
 
 test('an answer from an earlier chat or source revision cannot overwrite the current calendar', async () => {

@@ -81,7 +81,7 @@ function renderWIProblem(memory = state()) {
 }
 const status = text => {
     const node = document.getElementById('wm_status');
-    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'error' || item.status === 'stale');
+    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
     const destination = memory?.book ? `Книга результата: ${memory.book}.` : 'Книга результата ещё не создана.';
     const receipt = pending.length ? `WI не применён: ${pending[0].message}`
         : memory?.lastWIWrite ? `Подтверждено на диске · записей WorldMemory: ${memory.lastWIWrite.records}.` : '';
@@ -465,9 +465,6 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
         await update(false); signal?.throwIfAborted();
         const packet = bridge().snapshot({ effective: false }).packets.find(packet => packet.text === existingSummary
             && signature([...packet.sourceMessageIds].sort()) === signature([...sourceIds].sort()));
-        const failed = Object.entries(state()?.wiPackets || {}).find(([id, item]) => id !== packet?.id
-            && item.mode === 'diff' && item.status === 'error');
-        if (failed) throw new Error(`Предыдущий DIFF не обработан: ${failed[1].message}`);
         // A restored earlier proposal must progress before the ordinary next-block
         // review. Use the current archive writer/transport instead of re-entering it.
         const firstSource = packet?.sources?.length ? Math.min(...packet.sources.map(source => source.index)) : null;
@@ -737,7 +734,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         if (cleanupOnly) { await saveState(); return; }
         const pending = snapshot.packets.filter(packet => !packet.stale && (force
             || state().wiPackets[packet.id]?.revision !== attemptSignature(packet)
-            || (retrySaved && !['applied', 'proposed', 'rejected'].includes(state().wiPackets[packet.id]?.status))));
+            || (retrySaved && !['applied', 'proposed', 'rejected', 'partial'].includes(state().wiPackets[packet.id]?.status))));
         for (let i = 0; i < pending.length; i++) {
             unchanged(metadata); status(`Updating packet ${i + 1} / ${pending.length} · source ${sourceLabel(pending[i])}`);
             const packet = pending[i], revision = attemptSignature(packet);
@@ -750,7 +747,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                 } catch (error) {
                     unchanged(metadata);
                     state().wiPackets[packet.id] = { revision, status: 'error', mode: 'diff', message: error.message };
-                    await saveState(); throw error;
+                    await saveState(); continue;
                 }
                 await saveState(); continue;
             }
@@ -791,7 +788,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const waiting = ownedEntries(book, state().owner).filter(entry => entryMeta(entry).main && !entry.content?.trim()).length;
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
         const wiPending = Object.values(state().wiPackets).filter(item => !['applied', 'proposed', 'rejected'].includes(item.status));
-        const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale');
+        const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
             : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${diffManaged ? diffStatus() : 'Запись подтверждена на диске.'}${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
     } catch (error) {
@@ -803,13 +800,84 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
 }
 function recordDiffOutcome(packet, result, previous) {
     const memory = state(), packets = bridge().snapshot({ effective: false }).packets;
-    memory.wiPackets[packet.id] = { revision: wiAttemptRevision(packet), status: result.status, mode: 'diff' };
+    const priorOutcome = memory.wiPackets[packet.id];
+    if (!(priorOutcome?.correctionResolved && priorOutcome.revision === wiAttemptRevision(packet))) memory.wiPackets[packet.id] = { revision: wiAttemptRevision(packet), status: result.status, mode: 'diff', ...(result.issues?.length ? { issues: result.issues, message: `WI partial: ${result.issues.length} item(s) need correction.` } : {}) };
     memory.packets[packet.id] = packetSignature(packet);
     if (previous && memory.wiDiffState.lastReview?.proposalId === previous.id) {
         const prior = packets.find(item => item.id === previous.packetId);
-        if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior),
+        if (prior && memory.wiPackets[prior.id]?.status !== 'partial') memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior),
             status: memory.wiDiffState.lastReview.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
     }
+}
+async function correctPartialWI({ savedOnly = false } = {}) {
+    if (busy || bridge().isBusy()) return;
+    const metadata = ctx().chatMetadata, memory = state();
+    const entry = Object.entries(memory?.wiPackets || {}).find(([, value]) => value.status === 'partial' && (!savedOnly || value.correction?.responseText));
+    if (!entry) { status('No partial WI changes to correct.'); return; }
+    const [id, outcome] = entry, packet = bridge().snapshot({ effective: false }).packets.find(item => item.id === id);
+    if (!packet) { status('The source packet is unavailable.'); return; }
+    const original = packet.memoryMetadata?.wiDiff;
+    const failed = outcome.retryWire || { add: outcome.issues.filter(i => i.kind === 'add').map(i => original.add[i.index]),
+        remove: outcome.issues.filter(i => i.kind === 'remove').map(i => i.id ? original.remove.find(r => r.id === i.id) : original.remove[i.index]).filter(Boolean) };
+    const failedIds = outcome.retryIds || { add: outcome.issues.filter(i => i.kind === 'add').map(i => `add:${i.index}`),
+        remove: outcome.issues.filter(i => i.kind === 'remove').map(i => `remove:${i.index ?? i.id}`) };
+    clearTimeout(timer); busy = true; controller = new AbortController(); renderBusy();
+    try {
+        updateAuthorBook = requireChatWorldInfo(ctx());
+        let saved = savedOnly ? outcome.correction : null;
+        if (!saved && savedOnly) throw new Error('No saved correction response.');
+        if (!saved) {
+            const prepared = await wiDiffRuntime.prepare({ sourceIds: packet.sourceMessageIds, packetId: packet.id });
+            const systemPrompt = 'Correct source-backed World Info items. Return only valid JSON with results array. Each input id must have exactly one result with id, status corrected or rejected, item for corrected or reason for rejected. Do not repeat successful items or change manual records.';
+            const items = [...failed.add.map((item, index) => ({ id: failedIds.add[index], item })), ...failed.remove.map((item, index) => ({ id: failedIds.remove[index], item }))];
+            const userPrompt = JSON.stringify({ task: 'For every failed item return JSON {results:[{id,status,item,reason}]}. status is corrected or rejected. For corrected supply the corrected item; for rejected supply a reason. Keep every id exactly once. Never include successful changes.',
+                failed_items: items, causes: outcome.issues, world_memory_context: prepared.context, new_sources: packet.sources });
+            saved = outcome.correction = { status: 'requesting', systemPrompt, userPrompt, stamp: prepared.stamp, responseText: '' };
+            await saveState();
+            const response = await bridge().request(systemPrompt, userPrompt, { signal: controller.signal, stage: 'wi-correction', packetId: id, responseTokens: settings().responseTokens });
+            unchanged(metadata); saved.responseText = response.text; saved.status = 'received'; await saveState();
+        }
+        if (!saved?.responseText) throw new Error('No saved correction response.');
+        const parsed = parseModelJson(saved.responseText);
+        const expected = [...failed.add.map((item, index) => ({ id: failedIds.add[index], item, kind: 'add' })),
+            ...failed.remove.map((item, index) => ({ id: failedIds.remove[index], item, kind: 'remove' }))];
+        if (!Array.isArray(parsed.results) || parsed.results.length !== expected.length
+            || new Set(parsed.results.map(x => x.id)).size !== expected.length
+            || parsed.results.some(x => !expected.some(y => y.id === x.id) || !['corrected', 'rejected'].includes(x.status)
+                || (x.status === 'corrected' ? !x.item || typeof x.item !== 'object' : !String(x.reason || '').trim())))
+            throw new Error('Correction must identify every item once and give corrected data or a rejection reason.');
+        const rejected = parsed.results.filter(x => x.status === 'rejected');
+        const corrected = { add: parsed.results.filter(x => x.status === 'corrected' && x.id.startsWith('add:')),
+            remove: parsed.results.filter(x => x.status === 'corrected' && x.id.startsWith('remove:')) };
+        const wire = { version: 1, review: null, add: corrected.add.map(x => x.item), remove: corrected.remove.map(x => x.item) };
+        let result;
+        if (!wire.add.length && !wire.remove.length) result = { status: 'proposed', issues: [] };
+        else if (memory.wiDiffState?.pending?.id === packet.memoryMetadata.wiContext.proposalId
+            || memory.wiDiffState?.backfillPending?.state.pending?.id === packet.memoryMetadata.wiContext.proposalId)
+            result = await wiDiffRuntime.retryItems(packet, wire, saved.stamp.proposalId, controller.signal);
+        else {
+            const correctionPacket = { ...packet, memoryMetadata: { ...packet.memoryMetadata, wiContext: saved.stamp, wiDiff: wire } };
+            controller.signal.throwIfAborted(); unchanged(metadata);
+            result = await wiDiffRuntime.consume(correctionPacket);
+            controller.signal.throwIfAborted(); unchanged(metadata);
+        }
+        result.issues ||= [];
+        const remaining = { add: result.issues.filter(i => i.kind === 'add').map(i => wire.add[i.index]),
+            remove: result.issues.filter(i => i.kind === 'remove').map(i => i.id ? wire.remove.find(r => r.id === i.id) : wire.remove[i.index]).filter(Boolean) };
+        const retryIds = { add: result.issues.filter(i => i.kind === 'add').map(i => corrected.add[i.index]?.id),
+            remove: result.issues.filter(i => i.kind === 'remove').map(i => i.id ? corrected.remove.find(x => x.item?.id === i.id)?.id : corrected.remove[i.index]?.id) };
+        if (!wire.add.length && !wire.remove.length && rejected.length) {
+            controller.signal.throwIfAborted(); unchanged(metadata); const discarded = await wiDiffRuntime.discardEmptyProposal(packet);
+            controller.signal.throwIfAborted(); unchanged(metadata); result.status = discarded ? 'rejected' : 'proposed';
+        }
+        const decisions = rejected.map(item => ({ id: item.id, reason: item.reason, item: expected.find(x => x.id === item.id).item }));
+        unchanged(metadata);
+        memory.wiPackets[id] = { ...outcome, status: result.issues.length ? 'partial' : result.status, issues: result.issues, retryWire: remaining, retryIds, correction: null, correctionResolved: true,
+            correctionDecisions: [...(outcome.correctionDecisions || []), ...decisions],
+            message: result.issues.length ? `WI partial: ${result.issues.length} item(s) need correction.` : '' };
+        await saveState(); status(result.issues.length ? memory.wiPackets[id].message : 'Corrected items added to the pending WI proposal.');
+    } catch (error) { status(error.message); if (error.name !== 'AbortError') toastr.warning(error.message, 'World Memory'); }
+    finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); await renderArchive(); }
 }
 async function requestWIDiffReview(request, signal, savedOnly = false) {
     const metadata = ctx().chatMetadata, memory = state();
@@ -839,7 +907,7 @@ async function requestWIDiffReview(request, signal, savedOnly = false) {
         // The synthetic review packet is a receipt, not an archive/history record.
         if (previous || result.acceptedPacketId) {
             const prior = bridge().snapshot({ effective: false }).packets.find(item => item.id === (previous?.packetId || result.acceptedPacketId));
-            if (prior) memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
+            if (prior && memory.wiPackets[prior.id]?.status !== 'partial') memory.wiPackets[prior.id] = { revision: wiAttemptRevision(prior), status: wire.review.decision === 'accept' ? 'applied' : 'rejected', mode: 'diff' };
         }
         saved.status = 'applied'; saved.error = null; await saveState(); guard();
         history.changed(); status(`${wire.review.decision === 'accept' ? 'Предложение WI подтверждено и записано.' : 'Предложение отклонено; прежний WI сохранён.'} ${diffStatus()}`);
@@ -912,7 +980,7 @@ function schedule() {
 function renderBusy() {
     const working = busy || Boolean(archiveRuntime?.isBusy());
     if (!working) metadataRecovery?.notify();
-    $('#wm_update, #wm_retry_saved_wi, #wm_reparse_response, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
+    $('#wm_correct_partial_wi, #wm_retry_partial_wi, #wm_update, #wm_retry_saved_wi, #wm_reparse_response, #wm_backfill_metadata, #wm_repeat_metadata, #wm_backfill_spine, #wm_summarize, #wm_card_wi').prop('disabled', working);
     $('#wm_archive button, #wm_import, #wm_export, #wm_card_save, #wm_card_load, #wm_card_resume, #wm_apply_recommended, #wm_reset_summary_prompts, #wm_enabled, #wm_clear_embeddings').prop('disabled', working);
     $('#wm_stop').prop('disabled', !working);
     $('#wm_coverage_prepare, #wm_coverage_apply, #wm_coverage_spine, .wm-coverage-mutation').prop('disabled', working);
@@ -1299,6 +1367,8 @@ async function render() {
     renderCoverage();
     document.getElementById('wm_diff_status').textContent = diffStatus(memory);
     document.getElementById('wm_review_diff').hidden = !diffMode(memory) && !memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending;
+    document.getElementById('wm_correct_partial_wi').hidden = !Object.values(memory?.wiPackets || {}).some(item => item.status === 'partial');
+    document.getElementById('wm_retry_partial_wi').hidden = !Object.values(memory?.wiPackets || {}).some(item => item.status === 'partial' && item.correction?.responseText);
     document.getElementById('wm_retry_diff_review').hidden = !memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied';
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
@@ -1326,7 +1396,7 @@ async function render() {
             ? `Результат будет записан в ${linkedWI}. Ручные записи не перезаписываются; карточка и глобальные WI не меняются.`
             : `Выбранная книга ${linkedWI} отсутствует. Выберите другую; автоматической подмены нет.`
         : 'WI этого чата не выбран. История сохраняется; подготовка WI ждёт выбора. Книга из карточки или активного списка не подставляется.';
-    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status === 'error' || item.status === 'stale');
+    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
     document.getElementById('wm_saved_wi_status').textContent = `${wiCoverage(memory)} ${wiPending.length
         ? `${wiPending.length} результат(ов) требуют внимания: ${wiPending[0].message}`
         : 'Новые сообщения попадают сюда после сохранения L0; несжатый хвост ещё не обработан.'}`;
@@ -2251,6 +2321,8 @@ async function init() {
         status('Stage 1 now uses the displayed built-in WorldMemory prompts. Stage 2 was not changed.');
     });
     $('#wm_retry_saved_wi').on('click', () => { void update(false, true); });
+    $('#wm_correct_partial_wi').on('click', () => { void correctPartialWI(); });
+    $('#wm_retry_partial_wi').on('click', () => { void correctPartialWI({ savedOnly: true }); });
     $('#wm_review_diff').on('click', () => { void reviewLastWIDiff(); });
     $('#wm_retry_diff_review').on('click', () => { void reviewLastWIDiff({ savedOnly: true }); });
     $('#wm_reparse_response').on('click', () => { void backfillMetadata({ force: true, savedResponsesOnly: true }); });

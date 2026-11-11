@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.36 ? 2026-11-11 ? isolate WI corrections and retain calendar precision
+
+- Keep valid WI changes when individual additions or removals fail, record partial outcomes, and allow later packets to continue. Correct remaining items through one model request or reapply a saved response without another call.
+- Normalize temporary subject handles locally, preserve addressed identities and manual WI, and retain source, branch and historical review checks.
+- Preserve fractional days when extending an imported calendar baseline.
+
 ## 0.5.35 — 2026-11-11 — recover and explicitly clarify the game calendar
 
 - Automatically recover missing timelines from saved successful responses whose complete L0 text and current sources match, without a model call or importing an older game.

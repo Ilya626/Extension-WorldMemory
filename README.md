@@ -10,6 +10,8 @@ Missing calendar sidecars are automatically replayed from saved successful L0 re
 
 **Automatic search/WI recovery (0.5.34):** a new L0 or changed chat, book or connection starts one recovery queue when memory/RP generation is idle. It processes missing stage-2 metadata in chunks of up to four L0 blocks and continues while blocks are successfully prepared. A failure or unchanged partial result stops the same-input retry; a new L0 or changed connection permits another attempt. Stop and chat changes cancel active work. Pausing automatic summarization also pauses recovery. Existing usable or empty WI results are not regenerated automatically. Recovery makes stage-2 model calls and, for an earlier DIFF backlog, additional proposal-review calls; no separate recovery button is required.
 
+**WI corrections (0.5.36):** a malformed change no longer blocks unrelated WI changes or later packets. Partial items remain visible; use the correction button for one model request, or apply its saved response without another request. Protected manual entries and source and branch checks remain in force.
+
 **Optional WI diffs:** enable **WI через DIFF** below the chat's destination book. Stage 2 proposes addressed additions/removals. The next block reviews that proposal before publishing it and proposes its own changes. Until then, inference uses confirmed WI alongside the available history and recent chat. **Проверить последнее предложение** makes one explicit review call; its saved answer can be reapplied without another call. Rejection preserves the previous WI and leaves that block needing preparation. Original messages/L0 and retired claims remain stored; manual/foreign entries are protected. This mode is experimental and off by default: a second model pass can still reject bad proposals and does not guarantee complete extraction. Missing earlier WI uses a separate historical prefix and proposal. Before preparing a later block, recovery reviews that earlier proposal with the model, then reviews any later proposal against its changed base. These are additional review calls; original proposals remain stored until a valid review is applied. A missing model response still requires fresh model output; local replay cannot invent it.
 
 [Русский — полная инструкция](README_RU.md) · [Detailed reference](docs/REFERENCE.md) · [Changes](CHANGELOG.md)
@@ -18,7 +20,7 @@ Missing calendar sidecars are automatically replayed from saved successful L0 re
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains generated World Info references in the book explicitly selected for this chat.
 
-**0.5.35 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.36 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 Names containing an internal apostrophe, such as `Дари'Мар` and `Дари’Мар`, now remain one history-search term. Update **Russian WI Forms to 0.1.8** as well for whole-name forms and native WI activation, then reload SillyTavern. Existing saved keys and story text stay unchanged.
 

@@ -62,10 +62,23 @@ export function readCalendarModel(text, plan, responseId) {
         const item = parsed.packets[index];
         if (item?.id !== entry.packet.id) throw new Error('Порядок или привязки L0 изменены моделью. Прежние даты сохранены.');
         const result = readTimeline(item.timeline, entry.sources, entry.packet.text);
-        if (!result.timeline || result.timelineError) {
+        if (!result.timeline) {
             warnings.push({ packetId: item.id, error: result.timelineError || 'Calendar data is unavailable.' });
             continue;
         }
+        if (result.timelineError) {
+            warnings.push({ packetId: item.id, error: result.timelineError });
+            // Keep previously confirmed visits alongside supported new ones.
+            const locations = [...(entry.packet.timeline?.locations || []), ...result.timeline.locations];
+            const sourceOrder = new Map(entry.packet.sources.map((source, index) => [source.id, index]));
+            result.timeline.locations = locations.filter((location, index) => locations.findIndex(other =>
+                other.sourceIds?.[0] === location.sourceIds?.[0] && other.quote === location.quote) === index)
+                .sort((a, b) => (sourceOrder.get(a.sourceIds?.[0]) ?? Infinity) - (sourceOrder.get(b.sourceIds?.[0]) ?? Infinity)
+                    || (a.sourceSpans?.[0]?.start ?? 0) - (b.sourceSpans?.[0]?.start ?? 0));
+        }
+        if (entry.packet.timeline?.date?.precision === 'exact'
+            || (result.timeline.date.precision === 'unknown' && entry.packet.timeline?.date?.precision !== 'unknown' && entry.packet.timeline?.date))
+            result.timeline.date = entry.packet.timeline.date;
         updates.set(item.id, { timeline: { ...result.timeline, textRevision: entry.packet.textRevision,
             sourceFingerprints: entry.packet.sourceFingerprints, sourceStatus: 'linked', modelResponseId: responseId,
             ...(entry.continuationAfter === null ? {} : { continuationAfter: entry.continuationAfter,
@@ -73,5 +86,5 @@ export function readCalendarModel(text, plan, responseId) {
     }
     if (!updates.size) throw new Error('Модель не вернула подтверждённых календарных изменений. Прежние даты и места сохранены.');
     return { updates, warnings, note: [typeof parsed.note === 'string' ? parsed.note : '',
-        warnings.length ? `Не удалось уточнить ${warnings.length} блок(а); их прежние даты и места сохранены.` : ''].filter(Boolean).join(' ') };
+        warnings.length ? `Частичный результат: ${warnings.length} блок(а) с предупреждениями; неподтверждённые места не применены.` : ''].filter(Boolean).join(' ') };
 }

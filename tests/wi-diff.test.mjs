@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse } from '../wi-diff.js';
+import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, retryWIDiffItems, discardEmptyWIDiffProposal } from '../wi-diff.js';
 
 function fixture() {
     const sources = { s0: { revision: 'r0', index: 0 }, s1: { revision: 'r1', index: 1 }, s2: { revision: 'r2', index: 2 } };
@@ -47,4 +47,40 @@ test('historical WI projection hides future facts and aliases; stale source/base
         ...f.options(pending, 'p2', 'review2', 's2'), sources: { ...f.sources, s1: { ...f.sources.s1, revision: 'edited' } }
     }), /source|revision/);
     assert.equal(pending.pending.id, 'proposal1');
+});
+
+
+test('rejected temporary identities are localized and review survives the next proposal', () => {
+ const f=fixture(), fresh={...f.add,uid:null,subject:'new:3'};
+ const prior=applyWIDiffResponse(f.state,{version:1,review:null,add:[fresh],remove:[]},f.options(f.state,'p1','old','s1'));
+ const issues=[], wire={version:1,review:{proposalId:'old',decision:'reject'},add:[{...fresh,subject:'old:new:3'}, {...fresh,subject:'old:new:7'}],remove:[]};
+ const next=applyWIDiffResponse(prior,wire,{...f.options(prior,'p2','new','s2'),issues});
+ assert.equal(next.lastReview.decision,'reject'); assert.equal(next.pending.add.length,2); assert.deepEqual(issues,[]);
+ assert.notEqual(next.pending.add[0].subject,next.pending.add[1].subject);
+});
+
+test('partial preserves valid items and review, holds removals and survives replay', () => {
+ const f=fixture(), claim=f.state.confirmed.claims[0], issues=[];
+ const wire={version:1,review:null,add:[{...f.add,uid:2},f.add],remove:[{id:claim.id,revision:claim.revision}]};
+ const options={...f.options(f.state,'p1','proposal','s1'),issues};
+ const next=applyWIDiffResponse(f.state,wire,options);
+ assert.equal(next.pending.add.length,1); assert.equal(next.pending.remove.length,0); assert.equal(issues.length,2);
+ const again=[]; applyWIDiffResponse(next,wire,{...options,issues:again}); assert.deepEqual(again,issues);
+});
+
+test('targeted correction adds only failed items and keeps original pending claims', () => {
+ const f=fixture(), issues=[], wire={version:1,review:null,add:[f.add,{...f.add,uid:2}],remove:[]};
+ const pending=applyWIDiffResponse(f.state,wire,{...f.options(f.state,'p1','proposal','s1'),issues});
+ const result=retryWIDiffItems(pending,{add:[{...f.add,facts:'A second fact.'}],remove:[]},{...f.options(pending,'p1','retry','s1'),originalProposalId:'proposal'});
+ assert.equal(result.state.pending.add.length,2); assert.equal(result.state.pending.add[0].text,f.add.facts);
+ assert.deepEqual(result.issues,[]); assert.equal(result.state.confirmed.head,pending.confirmed.head);
+ const fresh={...f.add,uid:null,subject:'new:1'};
+ const p2=applyWIDiffResponse(f.state,{version:1,review:null,add:[fresh],remove:[]},f.options(f.state,'p1','original','s1'));
+ for (const subject of ['new:1','original:new:1']) {
+  const r=retryWIDiffItems(p2,{add:[{...fresh,subject,facts:'Another fact.'}],remove:[]},{...f.options(p2,'p1',`retry-${subject}`,'s1'),originalProposalId:'original'});
+  assert.equal(r.state.pending.add[1].subject,r.state.pending.add[0].subject);
+ }
+ const empty=structuredClone(p2); empty.pending.add=[];
+ assert.equal(discardEmptyWIDiffProposal(empty,'original').pending,null);
+ assert.equal(discardEmptyWIDiffProposal(p2,'original'),null);
 });
