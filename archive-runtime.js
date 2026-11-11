@@ -10,6 +10,8 @@ import { collectSummaryWorldInfo, attachSummaryWorldInfo, summaryWorldInfoBudget
 import { STORY_SPINE_INSTRUCTION, storySpineSources, readStorySpine } from './story-spine.js';
 import { TIMELINE_INSTRUCTION, CALENDAR_INSTRUCTION } from './timeline-sidecar.js';
 import { resolveCalendar } from './timeline-calendar.js';
+import { savedTimelineUpdates } from './timeline-recovery.js';
+import { CALENDAR_MODEL_SYSTEM, prepareCalendarModel, readCalendarModel, calendarModelKey } from './calendar-model.js';
 import { readKnowledgeBoundaries, mergeKnowledgeBoundaries } from './knowledge-boundaries.js';
 import { AWARENESS_INSTRUCTION, readAwarenessEvents, mergeAwarenessEvents } from './awareness.js';
 import { countTextTokens, tokenCounterStatus } from './token-counter.js';
@@ -56,6 +58,64 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         value.calendar = resolveCalendar(value.packets, context.chatMetadata, undefined, context.chat);
         return value;
     };
+    const timelineRecovery = () => savedTimelineUpdates(snapshot({ effective: false }).packets, getArchive().responses, clean);
+    function inspectTimelineRecovery() {
+        return { packetIds: [...timelineRecovery().keys()] };
+    }
+    async function applyTimelineUpdates(owner, updates, reason, validate = () => {}) {
+        guard(owner);
+        const previous = new Map([...updates.keys()].map(id => [id, readPacket(owner.archive, id)]));
+        for (const [id, update] of updates) putPacket(owner.archive, { ...previous.get(id), ...update });
+        try {
+            await persist(owner, reason);
+            validate();
+            await eventSource?.emit('worldmemory:archive-changed', { metadata: owner.metadata, reason });
+            guard(owner);
+            validate();
+        } catch (error) {
+            for (const [id, update] of updates) {
+                const current = readPacket(owner.archive, id), before = previous.get(id);
+                if (!current || JSON.stringify(current.timeline) !== JSON.stringify(update.timeline)) continue;
+                for (const key of ['timeline', 'timelineError']) {
+                    if (Object.hasOwn(before, key)) current[key] = before[key];
+                    else delete current[key];
+                }
+                putPacket(owner.archive, current);
+                for (const key of ['timeline', 'timelineError']) if (!Object.hasOwn(before, key)) delete owner.archive.records[id][key];
+            }
+            // The usual journal finalizer persists the rolled-back fields even
+            // when Stop followed a completed first save. Never save another chat.
+            owner.responsesDirty = true;
+            throw error;
+        }
+    }
+    async function recoverSavedTimelines(options = {}) {
+        return run(async owner => {
+            const updates = timelineRecovery();
+            if (updates.size) {
+                await applyTimelineUpdates(owner, updates, 'timeline-recovered');
+                status(`Calendar and route data recovered from ${updates.size} saved L0 response(s), without model calls.`);
+            }
+            return { saved: updates.size, packetIds: [...updates.keys()] };
+        }, options);
+    }
+    async function clarifyCalendar(options = {}) {
+        return run(async owner => {
+            const plan = prepareCalendarModel(snapshot({ effective: false }), owner.metadata, options);
+            const response = await transport(owner, CALENDAR_MODEL_SYSTEM, plan.prompt,
+                { stage: 'calendar', responseTokens: 6144 });
+            guard(owner);
+            const unchanged = () => {
+                if (calendarModelKey(snapshot({ effective: false }), owner.metadata) !== plan.key)
+                    throw new Error('История или календарная опора изменились во время запроса. Ответ не применён.');
+            };
+            unchanged();
+            const result = readCalendarModel(response.text, plan, response.archiveResponseId);
+            await applyTimelineUpdates(owner, result.updates, 'calendar-model', unchanged);
+            status(result.note || 'Календарь уточнён по L0 и исходным сообщениям.');
+            return { saved: result.updates.size, note: result.note, calendar: snapshot().calendar };
+        }, options);
+    }
     const historyText = () => {
         try { const text = historyProvider?.(); return typeof text === 'string' && text.trim() ? text : null; }
         catch (error) { console.warn('[World Memory] Selected history unavailable:', error); return null; }
@@ -123,6 +183,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         guard(owner);
         const selected = { ...config() };
         const stage = options.stage || 'legacy-wi';
+        if (stage === 'calendar') selected.summarizerStreaming = false;
         if (stage === 'metadata' || stage === 'legacy-wi' || stage === 'wi-review') selected.summarizerStreaming = selected.wiStreaming === true;
         if (Number(options.responseTokens) > 0) for (const key of ['summarizerResponseLength', 'openaiMaxTokens', 'ollamaMaxTokens']) selected[key] = Number(options.responseTokens);
         const trace = { id: crypto.randomUUID(), stage, streaming: Boolean(selected.summarizerStreaming), startedAt: Date.now(),
@@ -148,7 +209,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
         requestTrace = [...requestTrace.filter(item => item.metadata === owner.metadata), { metadata: owner.metadata, trace }].slice(-2);
         notifyRequest();
         let idle;
-        const idleSeconds = selected.summarizerStreaming ? 120 : 300;
+        const idleSeconds = stage === 'calendar' ? 600 : selected.summarizerStreaming ? 120 : 300;
         const activity = () => {
             clearTimeout(idle);
             idle = setTimeout(() => owner.controller.abort(new Error(`No response data for ${idleSeconds} seconds. Saved memory was kept.`)), idleSeconds * 1000);
@@ -163,7 +224,7 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
             if (!trace.responseText) capture({ responseText: result.text || '' });
             guard(owner); trace.status = 'complete'; trace.partial = false;
             trace.processedResponseText = result.text || '';
-            return { ...result, text: clean(result.text || '') };
+            return { ...result, text: clean(result.text || ''), archiveResponseId: trace.id };
         } catch (error) { trace.status = 'error'; trace.error = error.message; throw error; }
         finally { clearTimeout(idle); trace.finishedAt = Date.now(); journal(); notifyRequest(); }
     }
@@ -691,5 +752,6 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
     return Object.freeze({ version: 'archive-v1', protocol: 1, snapshot, isBusy, historyText, refreshInjection, inspectPrompts,
         setHistoryProvider(provider) { historyProvider = typeof provider === 'function' ? provider : null; },
         request: (system, prompt, options = {}) => run(owner => transport(owner, system, prompt, options), options),
-        backfillMemoryMetadata, backfillStorySpine, summarizeNow, regenerate: id => rewrite(id, false), refine: id => rewrite(id, true), edit, remove, stop, restoreStaleSources });
+        backfillMemoryMetadata, backfillStorySpine, inspectTimelineRecovery, recoverSavedTimelines, clarifyCalendar, summarizeNow,
+        regenerate: id => rewrite(id, false), refine: id => rewrite(id, true), edit, remove, stop, restoreStaleSources });
 }

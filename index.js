@@ -2123,6 +2123,13 @@ async function init() {
     metadataRecovery = createMetadataRecovery({
         read: () => {
             const s = settings(), memory = state(), context = ctx();
+            if (s.enabled && context.chatId && memory) {
+                const packetIds = archiveRuntime.inspectTimelineRecovery().packetIds;
+                if (packetIds.length) {
+                    const key = compactRevision(['saved-timeline', context.chatId, memory?.owner, packetIds]);
+                    return { key, inputKey: key, remaining: packetIds.length, packetIds, savedTimeline: true };
+                }
+            }
             if (!s.enabled || !s.auto || s.pauseSummarization || s.archiveAuto === false
                 || !memory?.book || !chatWorldInfo(context)) return null;
             const view = archiveRuntime.snapshot({ effective: false });
@@ -2141,11 +2148,12 @@ async function init() {
                 key: compactRevision([inputKey, packets.map(packet => packet.id), diff?.confirmed.head,
                     diff?.pending?.id, diff?.backfillPending?.state.pending?.id]) };
         },
-        recover: async ({ packetIds }, signal) => {
-            await archiveRuntime.backfillMemoryMetadata({ packetIds, signal, responseTokens: settings().responseTokens });
+        recover: async ({ packetIds, savedTimeline }, signal) => {
+            if (savedTimeline) await archiveRuntime.recoverSavedTimelines({ signal });
+            else await archiveRuntime.backfillMemoryMetadata({ packetIds, signal, responseTokens: settings().responseTokens });
             history.changed(); await renderArchive();
         },
-        isBusy: () => busy || archiveRuntime.isBusy(), onError: error => status(`Автоподготовка поиска / WI остановлена: ${error.message}`),
+        isBusy: () => busy || archiveRuntime.isBusy(), onError: error => status(`Автовосстановление памяти остановлено: ${error.message}`),
         eventSource: ctx().eventSource, chatChangedEvent: recoveryEvents.CHAT_CHANGED,
         changedEvents: [recoveryEvents.WORLDINFO_UPDATED, recoveryEvents.CHATCOMPLETION_MODEL_CHANGED,
             recoveryEvents.CHATCOMPLETION_SOURCE_CHANGED, recoveryEvents.OAI_PRESET_CHANGED_AFTER,

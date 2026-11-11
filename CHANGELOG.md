@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.35 — 2026-11-11 — recover and explicitly clarify the game calendar
+
+- Automatically recover missing timelines from saved successful responses whose complete L0 text and current sources match, without a model call or importing an older game.
+- Pair with World Atlas 0.4.8 for **Уточнить календарь моделью**: one explicit request reads selected L0 and complete original messages, then updates derived dates and played locations. Chat, L0 prose, WI and the fixed epoch remain intact.
+- Bind quotations to unique packet-scoped handles, preserve previous data for unsupported corrections, and roll back calendar changes on failed persistence, Stop or changed history. Long explicit calendar requests use a 600-second nonstreaming idle limit; other summarizer limits are unchanged.
+
 ## 0.5.33 — 2026-11-10 — preserve apostrophized names in history search
 
 - Keep names such as `Дари'Мар` as one history-search term and match the typographic apostrophe spelling `Дари’Мар`.

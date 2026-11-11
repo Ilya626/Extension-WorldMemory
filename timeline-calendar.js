@@ -5,6 +5,10 @@ const shortRevision = value => { let h = 2166136261; for (const c of String(valu
 const importedState = metadata => Object.values(metadata.worldAtlas?.tracking || {}).find(state =>
     state.importedSnapshot?.format === 'world-atlas-route' && Array.isArray(state.importedSnapshot.calendar?.rows)
     && Number.isFinite(state.importedSnapshot.calendar?.now?.elapsedHours) && state.importedSnapshot.calendar.now.elapsedHours >= 0);
+export function calendarImportRevision(metadata = {}) {
+    const carry = importedState(metadata)?.importedSnapshot;
+    return carry ? shortRevision(JSON.stringify([carry.calendarStart, carry.calendar.now, carry.binding?.attachment])) : null;
+}
 export function calendarAnchor(metadata = {}) {
     return importedState(metadata)?.importedSnapshot.calendarStart || metadata.worldMemory?.calendarAnchor
         || Object.values(metadata.worldAtlas?.tracking || {}).find(state => state.calendarStart)?.calendarStart || {};
@@ -70,13 +74,17 @@ export function resolveCalendar(packets, metadata = {}, overrideAnchor, chat = n
         && (!carry || (boundary !== null && Math.max(packet.order, packet.turnRange?.[1] ?? -1, ...(packet.sources || []).map(source => source.index)) > boundary)))
         .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
         const source = `l0:${packet.id}`, rev = shortRevision(packet.text), startHours = hours, start = stamp();
-        const timeline = packet.timeline?.textRevision === (packet.textRevision || hash(packet.text)) ? packet.timeline : null;
+        const candidate = packet.timeline?.textRevision === (packet.textRevision || hash(packet.text)) ? packet.timeline : null;
+        const timeline = candidate && (candidate.continuationAfter === undefined || (carry
+            && candidate.continuationAfter === boundary && candidate.calendarBaselineRevision === calendarImportRevision(metadata))) ? candidate : null;
         const timing = atlas.timing?.[source]?.revision === rev ? atlas.timing[source] : null;
         const partial = carry && packet.order <= boundary;
+        const continued = partial && timeline?.continuationAfter === boundary
+            && timeline.calendarBaselineRevision === calendarImportRevision(metadata);
         overlap ||= Boolean(partial);
-        const info = partial ? { elapsedHours: null, timePrecision: 'unknown' } : timeline || timing;
+        const info = partial && !continued ? { elapsedHours: null, timePrecision: 'unknown' } : timeline || timing;
         let events = timeline?.locations || (atlas.events || []).filter(event => event.source === source && event.revision === rev);
-        if (partial) events = events.flatMap(event => {
+        if (partial && !continued) events = events.flatMap(event => {
             const indices = (event.sourceIds || []).map(id => packet.sources?.find(source => source.id === id)?.index).filter(Number.isFinite);
             if (indices.length && indices.every(index => index <= boundary)) return [];
             return [{ ...event, offsetHours: null, time: null, boundaryUncertain: !indices.length || indices.some(index => index <= boundary) }];

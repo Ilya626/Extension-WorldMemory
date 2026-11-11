@@ -2,6 +2,8 @@
 
 **One game calendar:** the same L0 response records dated player locations and calendar transitions. The next L0 request receives the fixed per-chat epoch and accumulated date. A next-morning transition advances the calendar day without inventing an exact hour. `archive.snapshot().calendar` is the shared authority used by Atlas route and calendar dates; original relative wording remains evidence. Atlas offers a Legends calendar profile with familiar day/month aliases of the same game date and BBY/ABY year, not an Earth-date conversion. Unknown older intervals remain explicit; no extra calendar model calls run automatically to reconstruct them. Invalid location evidence is reported independently while valid elapsed time and supported visits remain usable; an unknown end hour preserves accumulated hours.
 
+Missing calendar sidecars are automatically replayed from saved successful L0 responses when their complete prose exactly matches one current source-linked L0. This local step makes no model call and requires no old game import; edited or stale L0 is preserved. In Atlas, **Уточнить календарь моделью** explicitly makes one summarizer-connection request using the selected L0 and their complete original messages. It updates only derived dates and player locations, preserving chat, L0 prose, WI and the fixed epoch. Stop, changed history or an unusable response keeps the previous calendar; unsupported packet corrections retain their previous dates and locations.
+
 **One-file game handoff:** **Экспорт всего** saves a complete private support bundle. **Импорт всего** creates a separate character, related lorebooks and complete chat/memory from that file. Copies share the next free suffix, such as `Import_(1)`; original games and API connection settings are preserved. Use this to exchange and improve complete game setups without replacing the installed original.
 
 **ST crashes while loading a large game PNG?** See [startup recovery](tools/PNG_RECOVERY_RU.md). The standalone repair replaces the dependency's memory-heavy PNG text decoder; it keeps cards and chats unchanged. Updating a browser extension alone cannot repair a crash before the browser loads.
@@ -16,7 +18,7 @@
 
 **Keep earlier story events within reach as your chat grows.** WorldMemory saves source-linked summaries of older messages, retrieves relevant history for the next reply, and maintains generated World Info references in the book explicitly selected for this chat.
 
-**0.5.34 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
+**0.5.35 · standalone preview.** No Summaryception installation is needed. API embeddings are the default; a local model is optional.
 
 Names containing an internal apostrophe, such as `Дари'Мар` and `Дари’Мар`, now remain one history-search term. Update **Russian WI Forms to 0.1.8** as well for whole-name forms and native WI activation, then reload SillyTavern. Existing saved keys and story text stay unchanged.
 
