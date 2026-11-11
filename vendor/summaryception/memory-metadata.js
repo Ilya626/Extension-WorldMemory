@@ -122,6 +122,7 @@ export function readMemoryMetadata(value, sources, { backfill = false, extractiv
     result.metadata = { version: 1, textRevision: backfill ? null : memoryTextRevision(prose),
         ...(extractiveFacts ? { factMode: 'verbatim-excerpts-v1' } : {}),
         lprime: validThread ? { text: thread.text.trim(), keys: [...new Set(thread.keys)] } : null, facts,
-        ...(validWI ? { wi: data.wi } : {}), ...(validDiff ? { wiDiff: data.wiDiff } : {}) };
+        ...(validWI ? { wi: data.wi } : {}), ...(validDiff ? { wiDiff: data.wiDiff } : {}),
+        ...(data.wiLocalReview && typeof data.wiLocalReview === 'object' ? { wiLocalReview:data.wiLocalReview } : {}) };
     return result;
 }

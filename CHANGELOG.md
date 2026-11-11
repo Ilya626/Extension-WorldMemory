@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.38 — 2026-11-12 — local WI contributions and isolated review
+
+- Move confirmed DIFF evidence into the existing L0 contribution store while retaining native UIDs, original claims, retirements and supported editorial corrections. Keep manual entries and the original journal.
+- Review proposed facts within the next metadata request or through the explicit review button. Retain rejected facts and reasons separately; saved responses can be retried without another model request. An unchanged failed review does not monopolize later blocks.
+- Preserve valid neighbouring WI items when one item is malformed. Legacy refresh cannot bypass review after migration.
+- A proposal omitting an existing confirmed fact does not delete it, including after accept-all review. Keep source-backed facts and explicit retirement decisions separate.
+- Keep forked chat memory in a separate book instead of copying generated entries into their source book. Track known review-source changes locally; older missing dependencies remain unknown.
+
 ## 0.5.37 ? 2026-11-11 ? review WI claims individually
 
 - Review each proposed claim independently; materialize accepted changes and retain rejected claims and reasons in review history. Existing all-accept and all-reject responses remain supported.

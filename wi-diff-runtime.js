@@ -1,4 +1,5 @@
-import { OWNER, entryMeta, fingerprint, markGenerated, signature, compactRevision } from './memory.js';
+import { OWNER, entryMeta, fingerprint, markGenerated, signature, compactRevision, retainedContent } from './memory.js';
+import { migrateConfirmedContributions } from './contribution-migration.js';
 import { sourceFingerprint } from './archive-store.js';
 import { memoryTextRevision } from './vendor/summaryception/memory-metadata.js';
 import { projectLegacyWI, createWIDiffState, getWIDiffContext, applyWIDiffResponse, bindWIDiffUIDs, retryWIDiffItems, discardEmptyWIDiffProposal } from './wi-diff.js';
@@ -152,6 +153,19 @@ export function createWIDiffRuntime({ ctx, snapshot, getBook, saveBook, initiali
         if (!book || !state) return { status: 'unchanged' };
         if (state.owner !== run.memory.owner || state.book !== run.memory.book || state.branch !== run.memory.owner)
             error('diff state belongs to another binding');
+        const migration = run.memory.wiContributionMigration;
+        if (migration?.owner === run.memory.owner && migration?.book === run.memory.book) {
+            const converted = migrateConfirmedContributions(book, run.memory, run.view);
+            for (const uid of converted.affected) {
+                const entry = converted.book.entries[uid];
+                entry.content = retainedContent(entry); markGenerated(entry);
+            }
+            guard(run);
+            if (run.memory.wiDiffState !== state) error('confirmed state changed during materialization');
+            if (signature(converted.book) !== signature(book)) await saveBook(converted.book, run.metadata, book);
+            guard(run);
+            return { status:'applied', records:converted.affected.length, unresolved:converted.unresolved.length };
+        }
         const next = clone(book), blocked = protectedUIDs(book, state.owner);
         const legacy = projectLegacyWI(book, run.view.packets, { owner: state.owner });
         const stateView = getWIDiffContext(state, { sources: run.sources, protectedUIDs: blocked });

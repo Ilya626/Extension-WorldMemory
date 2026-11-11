@@ -4,7 +4,7 @@
     <div class="inline-drawer-content">
       <p class="wm-muted">Keep the whole story in view: a complete outline with relevant original passages, plus recent chat.</p>
       <label class="checkbox_label"><input id="wm_enabled" data-setting="enabled" type="checkbox"><span>Enable WorldMemory</span></label>
-      <div class="wm-field"><label for="wm_card_wi">WI этого чата · куда записывать результат</label><select id="wm_card_wi" class="text_pole"></select></div>
+      <div class="wm-field"><label for="wm_card_wi">Выбранный WI этого чата · источник и обычное назначение</label><select id="wm_card_wi" class="text_pole"></select></div>
       <div id="wm_card_wi_status" class="wm-muted"></div>
       <div class="wm-actions"><button id="wm_wi_json_pick" class="menu_button" type="button">Импорт WI · JSON-файл</button><input id="wm_wi_json_file" type="file" accept="application/json,.json,text/plain,.txt" hidden></div>
       <details id="wm_wi_json_paste">
@@ -207,7 +207,7 @@
       </details>
 
       <details class="wm-section"><summary>World Info · entity reference</summary>
-        <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. Generated records are saved to the explicitly selected WI этого чата. Existing manual entries are kept; other books are not edited.</p>
+        <p class="wm-muted">WI describes entities; the L0 archive preserves the narrative. The selected WI is the usual destination. A branch writes to its separate copy, shown above. Manual entries are kept.</p>
         <label class="checkbox_label"><input id="wm_auto" data-setting="auto" type="checkbox"><span>Prepare and apply WI after saving L0</span></label>
         <details class="wm-advanced"><summary>Experimental NPC information events and graph</summary>
         <label class="checkbox_label"><input id="wm_knowledge_boundaries" data-setting="knowledgeBoundaries" type="checkbox"><span>Track NPC information events (experimental)</span></label>

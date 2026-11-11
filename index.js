@@ -24,6 +24,8 @@ import { collectSupportBundle } from './support-export.js';
 import { prepareSupportImport, rebindCompleteBackup, readSupportFile, importedBookBindings, filterImportedBookEntries } from './support-import.js';
 import { createWIDiffRuntime, DIFF_SYSTEM } from './wi-diff-runtime.js';
 import { usesWIDiffs } from './wi-diff.js';
+import { migrateConfirmedContributions } from './contribution-migration.js';
+import { localReviewItems, nextLocalReviewPacket, reviewedUpdates, mergePreservedFacts, contributionAction, forkSourceBooks } from './local-wi-policy.js';
 import { parseModelJson } from './model-json.js';
 import { installWIImport } from './wi-import.js';
 import { installPromptDiagnostics } from './prompt-diagnostics.js';
@@ -53,9 +55,46 @@ const hasSavedWI = packet => Boolean(packet.memoryMetadata?.wiDiff || Array.isAr
 const wiAttemptRevision = packet => compactRevision(packet.memoryMetadata?.wiDiff
     ? [packetSignature(packet), packet.memoryMetadata.wiDiff, packet.memoryMetadata.wiContext || null]
     : [packetSignature(packet), packet.memoryMetadata?.wi || null, packet.memoryMetadata?.wiContext || null]);
-const diffMode = (memory = state()) => usesWIDiffs(settings(), memory);
+const contributionMode = memory => Boolean(memory?.wiContributionMigration?.owner === memory?.owner
+    && memory?.wiContributionMigration?.book === memory?.book);
+const diffMode = (memory = state()) => !contributionMode(memory) && usesWIDiffs(settings(), memory);
+const LOCAL_REVIEW_INSTRUCTION = `When local_review is supplied, independently review EVERY proposed fact against that proposal's original sources. Return wiLocalReview:{packetId:"exact packet id",items:[{id:"exact item id",decision:"accept|reject",reason:"required for reject"}]} as a sibling of wi in the same memory_metadata object. Reject unsupported, overstated or episodic claims; never change other records. This review is separate from the current packet's new WI.`;
+const snapshotSourceBoundary = (chat, ids) => {
+    const selected = new Set(ids), positions = chat.flatMap((message,index) => selected.has(message.sc_message_id || message.extra?.sc_message_id) ? [index] : []);
+    return positions.length ? Math.min(...positions) : null;
+};
+function localReviewContext(snapshot, sourceIds) {
+    const selected = new Set(sourceIds), boundary = Math.min(...snapshot.chat.flatMap((m,i) => selected.has(m.sc_message_id || m.extra?.sc_message_id) ? [i] : []));
+    const packet = nextLocalReviewPacket(snapshot.packets, boundary, state(), wiAttemptRevision);
+    if (!packet) return null;
+    const {items, issues} = localReviewItems(packet.memoryMetadata.wi.updates);
+    return { packetId:packet.id, revision:wiAttemptRevision(packet), sourceFingerprints:packet.sourceFingerprints,
+        items, issues, sources:packet.sources.map(s => ({name:s.name, text:s.text})) };
+}
+function saveLocalReview(memory, snapshot, review, stamp, reviewer = null) {
+    const packet = snapshot.packets.find(p => p.id === stamp?.packetId);
+    if (!packet || packet.stale || wiAttemptRevision(packet) !== stamp.revision
+        || signature(packet.sourceFingerprints) !== signature(stamp.sourceFingerprints)) throw new Error('WI proposal sources changed; review was retained but not applied.');
+    const items = localReviewItems(packet.memoryMetadata.wi.updates).items.map(item=>item.id);
+    if (review?.packetId !== packet.id || !Array.isArray(review.items) || review.items.length !== items.length
+        || new Set(review.items.map(i=>i.id)).size !== items.length
+        || review.items.some(i=>!items.includes(i.id) || !['accept','reject'].includes(i.decision)
+            || (i.decision === 'reject' && (typeof i.reason !== 'string' || !i.reason.trim())))) throw new Error('Local review must decide every fact exactly once and explain rejections.');
+    memory.wiLocalReviews ||= {};
+    memory.wiLocalReviews[packet.id] = { stamp:structuredClone(stamp), review:structuredClone(review),
+        reviewer:reviewer ? {id:reviewer.id, sourceFingerprints:structuredClone(reviewer.sourceFingerprints)} : null };
+    if (memory.wiLocalReviewErrors) delete memory.wiLocalReviewErrors[packet.id];
+}
+function reviewedLocalWI(packet, saved) {
+    if (!saved || saved.stamp.revision !== wiAttemptRevision(packet) || signature(saved.stamp.sourceFingerprints) !== signature(packet.sourceFingerprints)) return null;
+    return reviewedUpdates(packet.memoryMetadata.wi.updates, saved.review);
+}
 function diffStatus(memory = state()) {
     const diff = memory?.wiDiffState;
+    if (contributionMode(memory)) {
+        const pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'pending-local-review').length;
+        return `WI по L0: ${pending} предложений ожидают отдельной проверки. Прежний DIFF и его решения сохранены${diff?.pending || diff?.backfillPending ? '; прежнее предложение доступно для отдельной проверки' : ''}.`;
+    }
     if (!diff) return diffMode(memory) ? 'DIFF: новые изменения сначала сохраняются как предложение.' : 'Обычный WI: подготовленные изменения записываются сразу.';
     const count = diff.confirmed.claims.filter(claim => !claim.legacy && !claim.retired).length;
     const rejected = (diff.reviewHistory?.[diff.lastReview?.proposalId]?.review?.items || diff.lastReview?.items || []).filter(item => item.decision === 'reject');
@@ -83,7 +122,7 @@ function renderWIProblem(memory = state()) {
 }
 const status = text => {
     const node = document.getElementById('wm_status');
-    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
+    const memory = state(), pending = Object.values(memory?.wiPackets || {}).filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial' || item.status === 'partial-contribution');
     const destination = memory?.book ? `Книга результата: ${memory.book}.` : 'Книга результата ещё не создана.';
     const receipt = pending.length ? `WI не применён: ${pending[0].message}`
         : memory?.lastWIWrite ? `Подтверждено на диске · записей WorldMemory: ${memory.lastWIWrite.records}.` : '';
@@ -125,6 +164,7 @@ function state() {
     value.packets ??= {}; value.mainNames ??= []; value.wiPackets ??= {};
     if (value.chatId !== ctx().chatId) {
         // A branch or renamed chat gets an independent book; no cross-chat write-through.
+        value.forkSourceBooks = [...new Set([...(value.forkSourceBooks || []), value.forkSourceBook, value.book, value.cloneFrom].filter(Boolean))];
         value.cloneFrom = value.book || value.cloneFrom;
         value.cloneOwner = value.book ? value.owner : value.cloneOwner;
         value.book = null; value.owner = crypto.randomUUID(); value.chatId = ctx().chatId;
@@ -245,7 +285,8 @@ async function getBook(create = false) {
     const memory = state();
     if (!memory) throw new Error('Open a character chat first.');
     const selected = chatWorldInfo(ctx());
-    if (create && selected && memory.book !== selected) await adoptSelectedBook(memory, selected);
+    const forkSource = Boolean(!memory.book && memory.cloneFrom) || forkSourceBooks(memory).includes(selected);
+    if (create && selected && memory.book !== selected && !forkSource) await adoptSelectedBook(memory, selected);
     if (!memory.book && !create) return null;
     if (!memory.book) {
         const metadata = ctx().chatMetadata, chat = ctx().chat, owner = memory.owner;
@@ -264,8 +305,12 @@ async function getBook(create = false) {
         const oldOwner = memory.cloneOwner || (owners.length === 1 ? owners[0] : null);
         if (memory.cloneFrom) {
             for (const [id, entry] of Object.entries(data.entries || {})) {
-                if (entryMeta(entry)) entryMeta(entry).owner = memory.owner;
+                if (entryMeta(entry)?.owner === oldOwner) entryMeta(entry).owner = memory.owner;
             }
+        }
+        if (oldBook) {
+            memory.forkSourceBook = oldBook;
+            memory.forkSourceBooks = [...new Set([...(memory.forkSourceBooks || []), oldBook])];
         }
         memory.book = name; delete memory.cloneFrom;
         await nativeWI.saveWorldInfo(name, data, true);
@@ -273,11 +318,25 @@ async function getBook(create = false) {
         if (oldBook && oldOwner) {
             rebindKnowledgeIdentities(memory.archive,
                 { book: oldData, world: oldBook, owner: oldOwner }, { book: data, world: name, owner: memory.owner });
+            const rebindJournal = journal => {
+                if (!journal || journal.owner !== oldOwner || journal.book !== oldBook) return;
+                journal.owner = memory.owner; journal.book = name;
+                if (journal.branch === oldOwner) journal.branch = memory.owner;
+                rebindJournal(journal.backfillPending?.state);
+            };
+            const rebindStamp = stamp => {
+                if (!stamp || stamp.owner !== oldOwner || stamp.book !== oldBook) return;
+                stamp.owner = memory.owner; stamp.book = name;
+                if (stamp.branch === oldOwner) stamp.branch = memory.owner;
+                rebindJournal(stamp.prefixState);
+            };
             for (const record of Object.values(memory.archive?.records || {})) {
-                const stamp = record.memoryMetadata?.wiContext;
-                if (stamp?.owner === oldOwner && stamp.book === oldBook) {
-                    stamp.owner = memory.owner; stamp.book = name;
-                }
+                rebindStamp(record.memoryMetadata?.wiContext);
+            }
+            rebindStamp(memory.wiDiffReview?.packet?.memoryMetadata?.wiContext);
+            rebindJournal(memory.wiDiffState);
+            if (memory.wiContributionMigration?.owner === oldOwner && memory.wiContributionMigration.book === oldBook) {
+                memory.wiContributionMigration.owner = memory.owner; memory.wiContributionMigration.book = name;
             }
         }
         delete memory.cloneOwner;
@@ -363,13 +422,14 @@ async function injectBook(payload) {
     if (!memory.book && memory.cloneFrom) await getBook(true);
     if (state() !== memory || !memory.book) return;
     const metadata = ctx().chatMetadata, world = memory.book;
+    const excluded = new Set([world, ...forkSourceBooks(memory)].filter(Boolean));
     const scope = nativeReferenceScope;
     if (scope && !scope.signal?.aborted && scope.metadata === ctx().chatMetadata) {
         // Author-reference collection already has a separate managed-record
         // catalogue. Exclude our book BEFORE native groups and token budgeting.
         for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
             const entries = payload[key];
-            if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry => entry.world !== scope.book));
+            if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry => entry.world !== scope.book && !excluded.has(entry.world)));
         }
         return;
     }
@@ -379,7 +439,7 @@ async function injectBook(payload) {
     // ST may have loaded our book before the local cleanup completed.
     for (const key of ['globalLore', 'characterLore', 'chatLore', 'personaLore']) {
         const entries = payload[key];
-        if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry => entry.world !== world));
+        if (Array.isArray(entries)) entries.splice(0, entries.length, ...entries.filter(entry => !excluded.has(entry.world)));
     }
     const present = new Set(['globalLore', 'characterLore', 'chatLore', 'personaLore']
         .flatMap(key => payload[key] || []).map(entry => `${entry.world}.${entry.uid}`));
@@ -465,6 +525,7 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
     if (diffMode()) {
         signal?.throwIfAborted();
         await update(false); signal?.throwIfAborted();
+        if (!diffMode()) return prepareSummaryContext({ sourceIds, existingSummary, signal, request });
         const packet = bridge().snapshot({ effective: false }).packets.find(packet => packet.text === existingSummary
             && signature([...packet.sourceMessageIds].sort()) === signature([...sourceIds].sort()));
         // A restored earlier proposal must progress before the ordinary next-block
@@ -497,6 +558,27 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
         requireChatWorldInfo(ctx());
         // Commit previous saved tails before the next L0 request; this path never calls a model.
         await update(false); guard();
+        // A pre-migration proposal remains independently reviewable. Attempt it
+        // once per unchanged journal state without blocking this L0 on failure.
+        if (contributionMode(state()) && request) {
+            const journal = state().wiDiffState, pending = journal?.backfillPending?.state.pending || journal?.pending;
+            const first = snapshotSourceBoundary(ctx().chat, sourceIds);
+            if (pending && first !== null && pending.through < first) {
+                const key = compactRevision([pending.id,pending.baseHead,pending.sources,journal.confirmed.head]);
+                if (state().wiLegacyReviewAuto?.key !== key) {
+                    state().wiLegacyReviewAuto = {key, status:'attempting'}; await saveState(); guard();
+                    try {
+                        await requestWIDiffReview(request, signal); guard();
+                        state().wiLegacyReviewAuto = {key,status:'complete'};
+                    } catch (error) {
+                        if (signal?.aborted) throw error;
+                        guard(); state().wiLegacyReviewAuto = {key,status:'error',message:error.message};
+                        status(`Прежний WI ожидает проверки: ${error.message}. Текущий L0 продолжает обработку.`);
+                    }
+                    await saveState(); guard();
+                }
+            }
+        }
         if (busy) return null;
         identity = { owner: state().owner, book: state().book };
         const book = await getBook(true); guard();
@@ -542,21 +624,33 @@ async function prepareSummaryContext({ sourceIds = [], existingSummary = null, s
             }
             guard();
         }
-        return { systemPrompt: SUMMARY_WI_SYSTEM,
+        const localReview = contributionMode(state()) ? localReviewContext(snapshot, sourceIds) : null;
+        return { systemPrompt: SUMMARY_WI_SYSTEM + (localReview ? `\n${LOCAL_REVIEW_INSTRUCTION}` : ''),
             context: { language, target_tokens_per_entry: settings().targetTokens, main_characters: [...state().mainNames],
                 player_name: snapshot.playerName, source_order: selected.length ? Math.min(...selected.map(row => row.index)) : null,
                 existing_index: index, retained_evidence: references,
-                native_world_info_readonly: nativeReference,
+                native_world_info_readonly: nativeReference, ...(localReview ? { local_review:localReview } : {}),
                 instruction: 'The existing_index is the catalogue of managed records, including inactive ones: match existing subjects instead of creating duplicates. retained_evidence contains their prior played-source facts. native_world_info_readonly contains Constant/key-activated author lore selected by ST; use it as background and identity support, never as a newly played event or editable UID. Return current-packet contributions only in wi.updates[].facts. Merge retained_evidence and the current sources into concise entity references, not episode logs, respecting source order. Manual records are read-only. UIDs without retained_evidence receive facts only; prior evidence is preserved locally.' },
-            stamp: { version: 1, owner: identity.owner, book: identity.book, authorBook, omittedPacketId: omit, referenceUIDs, entryRevisions } };
+            stamp: { version: 1, owner: identity.owner, book: identity.book, authorBook, omittedPacketId: omit, referenceUIDs, entryRevisions,
+                ...(localReview ? {localReview:{packetId:localReview.packetId, revision:localReview.revision, sourceFingerprints:localReview.sourceFingerprints}} : {}) } };
     } catch (error) {
         if (signal?.aborted) throw error;
         status(`WI context unavailable: ${error.message} L0 can still be saved. Retry saved WI or Update legacy WI.`);
         return null;
     }
 }
-function summaryRequest(packet, book) {
-    const updates = readSummaryWI(packet.memoryMetadata?.wi);
+function summaryRequest(packet, book, reviewedWI = null) {
+    const raw = reviewedWI || packet.memoryMetadata?.wi;
+    if (!Array.isArray(raw?.updates)) throw new Error('No valid saved WI updates. Refine the L0 or use Update legacy WI.');
+    const updates = [], issues = [...(reviewedWI?.issues || [])], seen = new Set();
+    for (const [index, item] of raw.updates.entries()) {
+        try {
+            const [update] = readSummaryWI({ updates:[item] });
+            if (update.uid !== null && seen.has(update.uid)) throw new Error('Repeated native UID.');
+            if (update.uid !== null) seen.add(update.uid);
+            updates.push(update);
+        } catch (error) { issues.push({ index, message:error.message }); }
+    }
     const authorBook = packet.memoryMetadata?.wiContext?.authorBook;
     if (authorBook !== undefined && authorBook !== chatWorldInfo(ctx()))
         throw new Error('Saved WI was prepared for a different chat-selected book. Retry metadata for the current binding.');
@@ -565,22 +659,22 @@ function summaryRequest(packet, book) {
         throw new Error('Saved WI belongs to a different book revision. Refine this L0 or use Update legacy WI.');
     }
     if (!stamp && updates.some(update => update.uid !== null)) throw new Error('Saved WI has native UIDs without a book context. Refine this L0 or use Update legacy WI.');
-    if (stamp && updates.some(update => update.uid !== null && !Object.hasOwn(stamp.entryRevisions || {}, update.uid))) {
-        throw new Error('Saved WI selected a UID outside its supplied native index. Refine this L0 or use Update legacy WI.');
+    if (stamp) for (let i = updates.length - 1; i >= 0; i--) if (updates[i].uid !== null && !Object.hasOwn(stamp.entryRevisions || {}, updates[i].uid)) {
+        issues.push({ uid:updates[i].uid, message:'UID was outside the supplied native index.' }); updates.splice(i, 1);
     }
     if (stamp?.version === 1 && stamp.owner === state().owner && stamp.book === state().book) {
         for (const entry of ownedEntries(book, state().owner)) if (stamp.referenceUIDs?.includes(entry.uid)
             && stamp.entryRevisions?.[entry.uid] === evidenceRevision(entry, packet.id)) included.add(entry.uid);
     }
-    return { updates, included };
+    return { updates, included, issues };
 }
 function clearUnprovenEntry(next, entry, keep = false) {
     if (entryMeta(entry).main || keep) { entry.content = ''; markGenerated(entry); }
     else delete next.entries[entry.uid];
 }
-async function applyPacket(packet, book, packets, metadata, savedWI = false) {
+async function applyPacket(packet, book, packets, metadata, savedWI = false, reviewedWI = null) {
     if (diffMode()) throw new Error('Этот чат использует WI-DIFF; legacy-запись отключена. Подготовьте DIFF для нужного блока.');
-    let { updates, included } = savedWI ? summaryRequest(packet, book) : await requestPacket(packet, book, metadata);
+    let { updates, included, issues = [] } = savedWI ? summaryRequest(packet, book, reviewedWI) : await requestPacket(packet, book, metadata);
     unchanged(metadata);
     const current = bridge().snapshot().packets.find(item => item.id === packet.id);
     const sameRevision = live => live && packetSignature(live) === packetSignature(packet)
@@ -589,8 +683,15 @@ async function applyPacket(packet, book, packets, metadata, savedWI = false) {
     if (!sameRevision(current)) throw new Error('The source packet or saved WI changed. Retry for the current saved revision.');
     // Work on a clone until all requested text is available; a failed request leaves the saved book intact.
     book = await getBook();
-    if (savedWI) ({ updates, included } = summaryRequest(packet, book));
+    if (savedWI) ({ updates, included, issues } = summaryRequest(packet, book, reviewedWI));
     const next = structuredClone(book);
+    const previousContributions = new Map(ownedEntries(next, state().owner).map(entry => [entry.uid, structuredClone(entryMeta(entry).contributions[packet.id] || null)]));
+    for (let i = updates.length - 1; i >= 0; i--) if (updates[i].uid !== null) {
+        const entry = next.entries[updates[i].uid];
+        if (!entry || entryMeta(entry)?.owner !== state().owner || detectManual(entry)) {
+            issues.push({ uid:updates[i].uid, message:'Unknown, foreign or manually edited WI entry.' }); updates.splice(i, 1);
+        }
+    }
     const previousSubjects = ownedEntries(next, state().owner).flatMap(entry => {
         const contribution = entryMeta(entry).contributions[packet.id];
         return contribution ? [{ uid: entry.uid, name: contribution.subjectName || entry.comment,
@@ -603,7 +704,7 @@ async function applyPacket(packet, book, packets, metadata, savedWI = false) {
         // Reapplying a packet must preserve a manual entry's existing provenance.
         // Actual source removal/invalidation is handled by removePackets.
         if (detectManual(entry)) continue;
-        if (entryMeta(entry).contributions[packet.id] && (savedWI || !samePacket || revisedUids.has(entry.uid))) {
+        if (entryMeta(entry).contributions[packet.id] && ((!reviewedWI && !issues.length && (savedWI || !samePacket)) || revisedUids.has(entry.uid))) {
             delete entryMeta(entry).contributions[packet.id]; affected.add(entry.uid);
         }
     }
@@ -623,13 +724,20 @@ async function applyPacket(packet, book, packets, metadata, savedWI = false) {
         const created = !entry;
         entry ??= initializeEntry(next, update.name, update.type, update.main);
         const meta = entryMeta(entry);
+        const previousContribution = previousContributions.get(entry.uid);
+        const preserve = issues.length > 0 || Boolean(reviewedWI && previousContribution) || reviewedWI?.preserve?.some(item => item.uid !== null ? item.uid === entry.uid
+            : normalize(item.name) === normalize(update.name) && item.type === update.type);
+        const facts = mergePreservedFacts(previousContribution?.facts, update.facts, preserve);
         const hasLaterEvidence = retainedFacts(entry, packet.id).some(fact => fact.order > packet.order);
         const currentIdentity = !savedWI || created || included.has(entry.uid) || !hasLaterEvidence;
         if (currentIdentity) meta.type = update.type;
         meta.main = meta.main || update.main || state().mainNames.some(name => normalize(name) === normalize(update.name));
-        meta.contributions[packet.id] = { facts: update.facts, sourceMessageIds: [...packet.sourceMessageIds], order: packet.order,
+        meta.contributions[packet.id] = { ...(preserve && previousContribution ? previousContribution : {}), facts, sourceMessageIds: [...packet.sourceMessageIds], order: packet.order,
             subjectName: update.name, subjectType: update.type,
-            packetRevision: compactRevision(packetSignature(packet)) };
+            packetRevision: compactRevision(packetSignature(packet)), contributionOrigin: 'l0',
+            localFacts:preserve && previousContribution?.localFacts
+                ? [...new Set(`${previousContribution.localFacts}\n${update.facts}`.split(/\r?\n/).filter(line=>line.trim()))].join('\n') : update.facts,
+            ...(preserve && previousContribution && !previousContribution.journalClaims ? {preservedFacts:previousContribution.facts} : {}) };
         if (currentIdentity) entry.comment = update.name;
         entry.key = savedWI ? [...new Set([...entry.key, ...update.keys])] : update.keys.length ? update.keys : [update.name];
         entry.constant = meta.main && settings().alwaysMain;
@@ -656,7 +764,7 @@ async function applyPacket(packet, book, packets, metadata, savedWI = false) {
     const saved = await saveBook(next, metadata, book);
     state().packets[packet.id] = packetSignature(packet);
     await saveState();
-    return saved;
+    return { book:saved, issues };
 }
 async function removePackets(book, ids, packets, metadata, { local = false, preserveEmpty = false } = {}) {
     if (!ids.length) return book;
@@ -702,13 +810,34 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
     let snapshot = bridge().snapshot();
     const metadata = snapshot.metadata;
     if (!snapshot.chatId) { status('Open a character chat first.'); return; }
-    if (force && diffMode()) { status('В режиме DIFF используйте подготовку поиска / WI. Последнее предложение проверяется отдельной кнопкой; legacy refresh не применяется к DIFF.'); return; }
+    if (force && diffMode() && !state()?.wiDiffState) { status('В режиме DIFF используйте подготовку поиска / WI.'); return; }
     busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = cleanupOnly ? null : requireChatWorldInfo(ctx());
         let book = await getBook(!cleanupOnly);
         if (!book) return;
         snapshot = bridge().snapshot();
+        if (!cleanupOnly && state().wiDiffState && !contributionMode(state())) {
+            const migrated = migrateConfirmedContributions(book, state(), snapshot);
+            for (const uid of migrated.invalidated) {
+                const entry = migrated.book.entries[uid]; entry.content = retainedContent(entry); markGenerated(entry);
+            }
+            book = await saveBook(migrated.book, metadata, book);
+            unchanged(metadata);
+            state().wiContributionMigration = { version:1, owner:state().owner, book:state().book,
+                unresolved:migrated.unresolved, at:Date.now() };
+            await saveState(); unchanged(metadata);
+        }
+        else if (contributionMode(state()) && state().wiDiffState) {
+            const restored = migrateConfirmedContributions(book, state(), snapshot);
+            if (restored.affected.length || restored.invalidated.length) {
+                for (const uid of new Set([...restored.affected, ...restored.invalidated])) {
+                    const entry = restored.book.entries[uid]; entry.content = retainedContent(entry); markGenerated(entry);
+                }
+                if (signature(restored.book) !== signature(book)) book = await saveBook(restored.book, metadata, book);
+                unchanged(metadata);
+            }
+        }
         const diffManaged = diffMode();
         if (!cleanupOnly && !diffManaged) {
             const beforeNames = structuredClone(book); syncMainNames(book);
@@ -728,19 +857,49 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                 const saved = entryMeta(entry).contributions[packet.id]?.packetRevision;
                 return saved && saved !== compactRevision(packetSignature(packet));
             }))).map(packet => packet.id);
+        let reviewInvalidated = false;
+        if (contributionMode(state())) for (const [id, review] of Object.entries(state().wiLocalReviews || {})) {
+            const reviewer = review.reviewer && snapshot.packets.find(p => p.id === review.reviewer.id);
+            if (review.reviewer && (!reviewer || reviewer.stale || signature(reviewer.sourceFingerprints) !== signature(review.reviewer.sourceFingerprints))) {
+                if (!revised.includes(id)) revised.push(id);
+                reviewInvalidated = true;
+                delete state().wiLocalReviews[id];
+                if (state().wiPackets[id]) state().wiPackets[id].status = 'pending-local-review';
+            }
+        }
         if (!diffManaged) book = await removePackets(book, revised, snapshot.packets, metadata, { local: true, preserveEmpty: true });
         else if (state().wiDiffState) { await wiDiffRuntime.materialize(); book = await getBook(); }
+        if (reviewInvalidated && state().wiDiffState) {
+            const restored = migrateConfirmedContributions(book, state(), snapshot);
+            for (const uid of new Set([...restored.affected, ...restored.invalidated])) {
+                const entry = restored.book.entries[uid]; entry.content = retainedContent(entry); markGenerated(entry);
+            }
+            if (signature(restored.book) !== signature(book)) book = await saveBook(restored.book, metadata, book);
+            unchanged(metadata);
+        }
         const attemptSignature = wiAttemptRevision;
         for (const packet of snapshot.packets.filter(packet => packet.stale)) state().wiPackets[packet.id] = {
             revision: attemptSignature(packet), status: 'stale', message: 'Original sources changed. Regenerate the affected L0; old automatic contributions were removed.' };
         if (cleanupOnly) { await saveState(); return; }
+        if (contributionMode(state())) for (const reviewer of snapshot.packets) {
+            const review = reviewer.memoryMetadata?.wiLocalReview, stamp = reviewer.memoryMetadata?.wiContext?.localReview;
+            if (!stamp || reviewer.stale || state().wiLocalReviews?.[stamp.packetId]) continue;
+            if (!review) {
+                state().wiLocalReviewErrors ||= {};
+                state().wiLocalReviewErrors[stamp.packetId] = {revision:stamp.revision, message:'Модель не вернула проверку этого L0.'};
+                continue;
+            }
+            try { saveLocalReview(state(), snapshot, review, stamp, reviewer); }
+            catch (error) { state().wiLocalReviewErrors ||= {}; state().wiLocalReviewErrors[stamp.packetId] = {revision:stamp.revision, message:error.message}; }
+        }
         const pending = snapshot.packets.filter(packet => !packet.stale && (force
             || state().wiPackets[packet.id]?.revision !== attemptSignature(packet)
+            || (state().wiPackets[packet.id]?.status === 'pending-local-review' && Boolean(state().wiLocalReviews?.[packet.id]))
             || (retrySaved && !['applied', 'proposed', 'rejected', 'partial', 'reviewed-partial'].includes(state().wiPackets[packet.id]?.status))));
         for (let i = 0; i < pending.length; i++) {
             unchanged(metadata); status(`Updating packet ${i + 1} / ${pending.length} · source ${sourceLabel(pending[i])}`);
             const packet = pending[i], revision = attemptSignature(packet);
-            if (packet.memoryMetadata?.wiDiff) {
+            if (diffManaged && packet.memoryMetadata?.wiDiff) {
                 try {
                     const previous = state().wiDiffState?.pending;
                     const result = await wiDiffRuntime.consume(packet);
@@ -762,6 +921,25 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                 continue;
             }
             const saved = Boolean(packet.memoryMetadata?.wi);
+            if (contributionAction(contributionMode(state()), saved) === 'prepare') {
+                state().wiPackets[packet.id] = {revision,status:'pending',mode:'saved-tail',
+                    message:'Для этого L0 нужно подготовить WI; существующие подтверждённые вклады сохранены.'};
+                await saveState(); continue;
+            }
+            if (contributionAction(contributionMode(state()), saved) === 'review') {
+                const reviewed = reviewedLocalWI(packet, state().wiLocalReviews?.[packet.id]);
+                if (!reviewed) {
+                    state().wiPackets[packet.id] = { revision, status:'pending-local-review', mode:'saved-tail',
+                        message:'WI этого L0 ожидает проверки; другие блоки продолжают обрабатываться.' };
+                    await saveState(); continue;
+                }
+                try {
+                    const result = await applyPacket(packet, book, snapshot.packets, metadata, true, reviewed); book = result.book;
+                    state().wiPackets[packet.id] = {revision, status:result.issues.length ? 'partial-contribution' : 'applied',
+                        mode:'reviewed-local', ...(result.issues.length ? {issues:result.issues,message:`${result.issues.length} WI item(s) need attention.`} : {})};
+                } catch (error) { unchanged(metadata); state().wiPackets[packet.id] = {revision,status:'error',mode:'reviewed-local',message:error.message}; }
+                await saveState(); continue;
+            }
             if (!saved && !force) {
                 state().wiPackets[packet.id] = packet.memoryMetadata?.wiContext?.diff
                     ? { revision, status: 'error', mode: 'diff', message: packet.annotationError
@@ -770,17 +948,18 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
                 continue;
             }
             try {
-                book = await applyPacket(packet, book, snapshot.packets, metadata, saved);
-                state().wiPackets[packet.id] = { revision, status: 'applied', mode: saved ? 'saved-tail' : 'legacy-request' };
+                const result = await applyPacket(packet, book, snapshot.packets, metadata, saved);
+                book = result.book;
+                state().wiPackets[packet.id] = { revision, status: result.issues.length ? 'partial-contribution' : 'applied',
+                    mode: saved ? 'saved-tail' : 'legacy-request', ...(result.issues.length ? { issues:result.issues, message:`${result.issues.length} WI item(s) need attention.` } : {}) };
             } catch (error) {
                 unchanged(metadata);
                 if (force && saved) {
                     // Explicit legacy action may request a repair; automatic/saved retry never does.
                     status(`Saved WI could not be applied: ${error.message} Requesting the explicit legacy refresh…`);
-                    book = await applyPacket(packet, book, snapshot.packets, metadata, false);
+                    book = (await applyPacket(packet, book, snapshot.packets, metadata, false)).book;
                     state().wiPackets[packet.id] = { revision, status: 'applied', mode: 'legacy-request' };
-                } else if (force) throw error;
-                else state().wiPackets[packet.id] = { revision, status: 'error', message: error.message };
+                } else state().wiPackets[packet.id] = { revision, status: 'error', message: error.message };
             }
             await saveState();
         }
@@ -790,7 +969,7 @@ async function runUpdate(force = false, retrySaved = false, cleanupOnly = false)
         const waiting = ownedEntries(book, state().owner).filter(entry => entryMeta(entry).main && !entry.content?.trim()).length;
         const historyErrors = Object.values(state().history || {}).filter(item => item.error).length;
         const wiPending = Object.values(state().wiPackets).filter(item => !['applied', 'proposed', 'rejected', 'reviewed-partial'].includes(item.status));
-        const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
+        const wiError = wiPending.find(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial' || item.status === 'partial-contribution');
         status(stale ? `${stale} L0 packet(s) have changed sources. Their old automatic WI contributions were removed; regenerate those L0s.`
             : `Сохранено в ${state().book} · записей: ${ownedEntries(book, state().owner).length}, L0: ${Object.keys(state().packets).length}. ${diffManaged ? diffStatus() : 'Запись подтверждена на диске.'}${wiError ? ` Ошибка WI: ${wiError.message}` : wiPending.length ? ` Ожидают подготовки WI: ${wiPending.length} блоков; используйте Prepare search / WI.` : ''}${waiting ? ` ${waiting} main profile(s) await played evidence.` : ''}${historyErrors ? ` ${historyErrors} packet(s) need optional history markup; saved L0 is retained.` : ''}`);
     } catch (error) {
@@ -934,20 +1113,49 @@ async function requestWIDiffReview(request, signal, savedOnly = false) {
         throw error;
     }
 }
+async function requestLocalReview(request, signal, savedOnly = false) {
+    const memory = state(), snapshot = bridge().snapshot({effective:false});
+    const packet = snapshot.packets.find(p => memory.wiPackets?.[p.id]?.status === 'pending-local-review'
+        && (!savedOnly || memory.wiLocalReviewRequests?.[p.id]?.responseText));
+    if (!packet || packet.stale || !packet.memoryMetadata?.wi?.updates) throw new Error('Нет сохранённого предложения WI для этой проверки.');
+    const metadata = ctx().chatMetadata, guard = () => { signal?.throwIfAborted(); unchanged(metadata); };
+    memory.wiLocalReviewRequests ||= {};
+    let saved = savedOnly ? memory.wiLocalReviewRequests[packet.id] : null;
+    if (!saved) {
+        const {items} = localReviewItems(packet.memoryMetadata.wi.updates);
+        const stamp = {packetId:packet.id, revision:wiAttemptRevision(packet), sourceFingerprints:packet.sourceFingerprints};
+        const prompt = JSON.stringify({task:'Review this one saved proposal. Return only JSON {packetId,items:[{id,decision,reason}]} with exactly one decision per item.',
+            packetId:packet.id,items,sources:packet.sources.map(s=>({name:s.name,text:s.text}))});
+        saved = memory.wiLocalReviewRequests[packet.id] = {stamp, prompt, responseText:''};
+        await saveState(); guard();
+        const response = await request(LOCAL_REVIEW_INSTRUCTION, prompt, {signal,stage:'wi-local-review',packetId:packet.id,responseTokens:settings().responseTokens});
+        guard(); saved.responseText = response.text; await saveState(); guard();
+    }
+    try {
+        const parsed = parseModelJson(saved.responseText), review = parsed.wiLocalReview || parsed;
+        guard(); saveLocalReview(memory, bridge().snapshot({effective:false}), review, saved.stamp); await saveState(); guard();
+    } catch (error) {
+        guard(); memory.wiLocalReviewErrors ||= {}; memory.wiLocalReviewErrors[packet.id] = {revision:wiAttemptRevision(packet), message:error.message};
+        await saveState(); throw error;
+    }
+}
 async function reviewLastWIDiff({ savedOnly = false } = {}) {
     if (busy || !wiDiffRuntime || bridge().isBusy()) return;
     const metadata = ctx().chatMetadata, memory = state();
-    if (!memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending && !memory?.wiDiffReview?.responseText) { status('Нет предложения WI для проверки.'); return; }
+    const localPending = contributionMode(memory) && Object.values(memory?.wiPackets || {}).some(item => item.status === 'pending-local-review');
+    if (!localPending && !memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending && !memory?.wiDiffReview?.responseText) { status('Нет предложения WI для проверки.'); return; }
     clearTimeout(timer); busy = true; controller = new AbortController(); renderBusy();
     try {
         updateAuthorBook = requireChatWorldInfo(ctx());
-        await requestWIDiffReview((system, prompt, options) => bridge().request(system, prompt, options), controller.signal, savedOnly);
+        if (localPending) await requestLocalReview((system, prompt, options) => bridge().request(system, prompt, options), controller.signal, savedOnly);
+        else await requestWIDiffReview((system, prompt, options) => bridge().request(system, prompt, options), controller.signal, savedOnly);
     } catch (error) {
         if (ctx().chatMetadata === metadata && state() === memory && memory.wiDiffReview) {
             memory.wiDiffReview.error = error.message; await saveState();
         }
         status(error.message);
     } finally { updateAuthorBook = null; controller = null; busy = false; renderBusy(); await render(); await renderArchive(); }
+    if (localPending) await update(false);
 }
 async function backfillSpine() {
     if (busy || !bridge() || bridge().isBusy()) return;
@@ -1002,8 +1210,10 @@ function renderBusy() {
     $('#wm_export_all, #wm_import_all').prop('disabled', working);
     $('#wm_wi_diffs').prop('checked', diffMode()).prop('disabled', working || Boolean(state()?.wiDiffState));
     $('#wm_update').prop('disabled', working || diffMode());
-    $('#wm_review_diff').prop('disabled', working || !(state()?.wiDiffState?.pending || state()?.wiDiffState?.backfillPending));
-    $('#wm_retry_diff_review').prop('disabled', working || !state()?.wiDiffReview?.responseText || state()?.wiDiffReview?.status === 'applied');
+    const localReviewPending = contributionMode(state()) && Object.values(state()?.wiPackets || {}).some(item => item.status === 'pending-local-review');
+    const localReviewSaved = localReviewPending && Object.values(state()?.wiLocalReviewRequests || {}).some(item => item.responseText);
+    $('#wm_review_diff').prop('disabled', working || !(localReviewPending || state()?.wiDiffState?.pending || state()?.wiDiffState?.backfillPending));
+    $('#wm_retry_diff_review').prop('disabled', working || !(localReviewSaved || (state()?.wiDiffReview?.responseText && state()?.wiDiffReview?.status !== 'applied')));
     $('#wm_coverage_stop').prop('hidden', !working);
     const activity = document.getElementById('wm_coverage_working');
     if (activity) {
@@ -1385,10 +1595,12 @@ async function render() {
     renderWIProblem(memory);
     renderCoverage();
     document.getElementById('wm_diff_status').textContent = diffStatus(memory);
-    document.getElementById('wm_review_diff').hidden = !diffMode(memory) && !memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending;
+    const localReviewPending = contributionMode(memory) && Object.values(memory?.wiPackets || {}).some(item => item.status === 'pending-local-review');
+    document.getElementById('wm_review_diff').hidden = !localReviewPending && !diffMode(memory) && !memory?.wiDiffState?.pending && !memory?.wiDiffState?.backfillPending;
     document.getElementById('wm_correct_partial_wi').hidden = !Object.values(memory?.wiPackets || {}).some(item => item.status === 'partial');
     document.getElementById('wm_retry_partial_wi').hidden = !Object.values(memory?.wiPackets || {}).some(item => item.status === 'partial' && item.correction?.responseText);
-    document.getElementById('wm_retry_diff_review').hidden = !memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied';
+    document.getElementById('wm_retry_diff_review').hidden = !(localReviewPending && Object.values(memory?.wiLocalReviewRequests || {}).some(item => item.responseText))
+        && (!memory?.wiDiffReview?.responseText || memory.wiDiffReview.status === 'applied');
     document.getElementById('wm_runtime_version').textContent = `WorldMemory ${VERSION}`;
     const character = ctx().characters[ctx().characterId];
     const embedded = character?.data?.extensions?.worldMemoryBackup;
@@ -1404,7 +1616,9 @@ async function render() {
     const integration = globalThis.RussianWIForms?.getStatus?.();
     document.getElementById('wm_integration').textContent = `Archive: ${bridge()?.version || 'loading'} · Russian WI: ${integration ? integration.enabled ? integration.ready ? 'ready' : 'loading dictionary' : 'disabled' : 'not loaded (optional)'}`;
     document.getElementById('wm_book').textContent = chatWorldInfo(ctx())
-        ? `Книга записи: ${chatWorldInfo(ctx())}. Ручные записи сохраняются.`
+        ? memory?.book ? `Книга записи: ${memory.book}. Ручные записи сохраняются.`
+            : memory?.cloneFrom ? 'Книга записи этой ветки ещё не создана; будет создана отдельная копия.'
+                : `Книга записи после подготовки: ${chatWorldInfo(ctx())}.`
         : 'Выберите WI этого чата: запись в случайный или активный ворлдбук не выполняется.';
     const cardWI = document.getElementById('wm_card_wi'), linkedWI = chatWorldInfo(ctx());
     cardWI.replaceChildren(new Option('Не выбран — выберите WI для этого чата', ''),
@@ -1412,10 +1626,14 @@ async function render() {
     cardWI.value = linkedWI;
     document.getElementById('wm_card_wi_status').textContent = linkedWI
         ? (nativeWI.world_names || []).includes(linkedWI)
-            ? `Результат будет записан в ${linkedWI}. Ручные записи не перезаписываются; карточка и глобальные WI не меняются.`
+            ? memory?.book && memory.book !== linkedWI
+                ? `Выбранный WI: ${linkedWI}. Запись этой ветки: ${memory.book}. Ручной лор сохранён в копии; исходная книга не изменяется.`
+                : memory?.cloneFrom && !memory.book
+                    ? `Выбранный WI: ${linkedWI}. Для записи этой ветки будет создана отдельная копия.`
+                    : `Выбранный WI и книга записи: ${memory?.book || linkedWI}. Ручные записи сохраняются; глобальный выбор не меняется.`
             : `Выбранная книга ${linkedWI} отсутствует. Выберите другую; автоматической подмены нет.`
         : 'WI этого чата не выбран. История сохраняется; подготовка WI ждёт выбора. Книга из карточки или активного списка не подставляется.';
-    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial');
+    const wiResults = Object.values(memory?.wiPackets || {}), wiPending = wiResults.filter(item => item.status === 'error' || item.status === 'stale' || item.status === 'partial' || item.status === 'partial-contribution');
     document.getElementById('wm_saved_wi_status').textContent = `${wiCoverage(memory)} ${wiPending.length
         ? `${wiPending.length} результат(ов) требуют внимания: ${wiPending[0].message}`
         : 'Новые сообщения попадают сюда после сохранения L0; несжатый хвост ещё не обработан.'}`;
@@ -1775,7 +1993,7 @@ async function selectChatWI() {
         memory.wiSourceBook = name;
         await saveState();
         if (name) await getBook(true);
-        status(name ? `Книга записи WI этого чата: ${name}. Существующие записи сохранены.` : 'WI этого чата отключён. История сохранена; чужая книга не подставляется.');
+        status(name ? `Выбранный WI: ${name}. Книга записи этого чата: ${memory.book || 'ещё не создана'}.` : 'WI этого чата отключён. История сохранена; чужая книга не подставляется.');
     } finally {
         controller = null; busy = false; renderBusy(); await render();
     }

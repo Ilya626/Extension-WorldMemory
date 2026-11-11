@@ -440,8 +440,9 @@ export function installArchiveRuntime({ ctx, settings, getArchive, saveArchive, 
                 'Character knowledge mapping changed; saved hints were kept and old actor handles were not reassigned.'].filter(Boolean).join(' ');
             if (parsed.metadata?.wi) try { readSummaryWI(parsed.metadata.wi); }
             catch (error) {
-                delete parsed.metadata.wi;
-                parsed.warning = [parsed.warning, `WI schema: ${error.message}`].filter(Boolean).join(' ');
+                // Preserve the complete saved proposal: the local per-item path
+                // can review valid neighbours and report malformed entries.
+                parsed.warning = [parsed.warning, `WI schema: ${error.message} Saved items remain available for individual review.`].filter(Boolean).join(' ');
             }
             if (wi?.stamp?.diff && parsed.metadata?.wi) {
                 delete parsed.metadata.wi;

@@ -1,5 +1,7 @@
 /** Use ST's own matching, books, recursion, probability, groups and WI budget. */
 import { countTextTokens } from '../../token-counter.js';
+import { fingerprint } from '../../memory.js';
+import { forkSourceBooks } from '../../local-wi-policy.js';
 let scanning = false;
 let sourceScope = null;
 let sourceSignal;
@@ -94,7 +96,10 @@ async function worldInfoEntries(result, excludedBooks = new Set(), allowedBook =
 
 export async function collectSummaryWorldInfo(story, prior, options = {}) {
     const context = SillyTavern.getContext();
-    const book = requireChatWorldInfo(context);
+    const selectedBook = requireChatWorldInfo(context), memory = context.chatMetadata?.worldMemory;
+    // For a fork, author lore comes from its isolated copy, not the parent book.
+    const ancestors = forkSourceBooks(memory);
+    const book = ancestors.includes(selectedBook) && memory?.book ? memory.book : selectedBook;
     const avatar = context.characters?.[context.characterId]?.avatar;
     installWorldInfoTracking(context);
     // checkWorldInfo avoids WORLD_INFO_ACTIVATED (and chat-generation scripts).
@@ -126,7 +131,7 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
         options.signal?.throwIfAborted();
         if (SillyTavern.getContext().chatMetadata !== metadata) throw new Error('Chat changed during World Info scan');
         const current = SillyTavern.getContext();
-        if (chatWorldInfo(current) !== book || current.characters?.[current.characterId]?.avatar !== avatar)
+        if (chatWorldInfo(current) !== selectedBook || current.characters?.[current.characterId]?.avatar !== avatar)
             throw new Error('The chat WI selection changed during the scan. Retry with the current linked book.');
     };
     const scanFields = {
@@ -138,7 +143,10 @@ export async function collectSummaryWorldInfo(story, prior, options = {}) {
     sourceBook = book;
     // Managed profiles already enter through their source-linked catalogue.
     // Do not feed generated state back as independent author lore.
-    sourceEntries = Object.entries(bookData.entries || {}).filter(([, entry]) => !entry.extensions?.worldMemory?.owner)
+    sourceEntries = Object.entries(bookData.entries || {}).filter(([, entry]) => {
+        const meta = entry.extensions?.worldMemory;
+        return !meta?.owner || Boolean(meta.manual || meta.lastGenerated && meta.lastGenerated !== fingerprint(entry));
+    })
         .map(([uid, entry]) => ({ ...entry, uid: entry.uid ?? uid, world: book }));
     sourceSignal = options.signal;
     sourceScope = Object.freeze([]);
